@@ -38,7 +38,7 @@ void shell_cleanup(void);
 
 // Utility functions
 void command_free(command_t *cmd);
-char *find_file_completion(const char *prefix);
+char **get_path_completions(const char *path, int *count);
 
 // Job control functions
 int get_pid_by_job_id(int job_id);

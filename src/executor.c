@@ -113,7 +113,7 @@ void execute_command(command_t *cmd) {
     if (cmd->args[0] == NULL) {
         return;
     }
-
+	
     // Handle built-in commands
     if (strcmp(cmd->args[0], "help") == 0) {
         printf("%s", HELP_TEXT);
@@ -225,33 +225,29 @@ void execute_command(command_t *cmd) {
         signal(SIGTTOU, SIG_DFL);
         signal(SIGCHLD, SIG_DFL);
 
-        // Handle input redirection
-        if (cmd->input_file != NULL) {
-            int fd_in = open(cmd->input_file, O_RDONLY);
-            if (fd_in < 0) {
-                perror("open input file");
-                exit(EXIT_FAILURE);
-            }
-            dup2(fd_in, STDIN_FILENO);
-            close(fd_in);
-        }
-
         // Handle output redirection
         if (cmd->output_file != NULL) {
             int flags = O_CREAT | O_WRONLY;
             flags |= (cmd->append_output) ? O_APPEND : O_TRUNC;
             int fd_out = open(cmd->output_file, flags, 0644);
             if (fd_out < 0) {
-                perror("open output file");
+                perror(cmd->output_file);
                 exit(EXIT_FAILURE);
             }
             dup2(fd_out, STDOUT_FILENO);
             close(fd_out);
         }
 
-        // Make sure output is line buffered
-        setvbuf(stdout, NULL, _IOLBF, 0);
-        setvbuf(stderr, NULL, _IOLBF, 0);
+        // Handle input redirection
+        if (cmd->input_file != NULL) {
+            int fd_in = open(cmd->input_file, O_RDONLY);
+            if (fd_in < 0) {
+                perror(cmd->input_file);
+                exit(EXIT_FAILURE);
+            }
+            dup2(fd_in, STDIN_FILENO);
+            close(fd_in);
+        }
 
         if (execvp(cmd->args[0], cmd->args) == -1) {
             perror("execvp");

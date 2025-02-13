@@ -6,6 +6,7 @@
 #include <dirent.h>
 #include <errno.h>
 #include <ctype.h>
+#include <sys/stat.h>
 #include "shell.h"
 #include "history.h"
 
@@ -20,6 +21,95 @@ static void update_buffer_state(char *buffer, int pos, int cursor) {
     current_input_buffer[pos] = '\0';
     current_input_length = pos;
     current_cursor_pos = cursor;
+}
+
+char **get_path_completions(const char *path, int *count) {
+    char dir_path[PATH_MAX] = ".";
+    const char *search_prefix = path;
+    
+    // Find the last component for matching
+    const char *last_slash = strrchr(path, '/');
+    if (last_slash) {
+        size_t dir_len = last_slash - path;
+        strncpy(dir_path, path, dir_len);
+        dir_path[dir_len] = '\0';
+        search_prefix = last_slash + 1;
+    }
+
+    DIR *dir = opendir(*dir_path ? dir_path : ".");
+    if (!dir) return NULL;
+
+    // First pass: count valid matches (excluding . and ..)
+    *count = 0;
+    struct dirent *entry;
+    size_t prefix_len = strlen(search_prefix);
+    
+    while ((entry = readdir(dir)) != NULL) {
+        // Skip . and .. entries
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+            continue;
+        }
+        if (strncmp(entry->d_name, search_prefix, prefix_len) == 0) {
+            (*count)++;
+        }
+    }
+
+    if (*count == 0) {
+        closedir(dir);
+        return NULL;
+    }
+
+    // Allocate array for matches
+    char **matches = malloc(sizeof(char *) * (*count));
+    if (!matches) {
+        closedir(dir);
+        return NULL;
+    }
+
+    // Second pass: store matches
+    rewinddir(dir);
+    int i = 0;
+    while ((entry = readdir(dir)) != NULL && i < *count) {
+        // Skip . and .. entries
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+            continue;
+        }
+        
+        if (strncmp(entry->d_name, search_prefix, prefix_len) == 0) {
+            char check_path[PATH_MAX];
+            snprintf(check_path, PATH_MAX, "%s/%s", 
+                    (*dir_path ? dir_path : "."), entry->d_name);
+            
+            struct stat st;
+            if (stat(check_path, &st) == 0) {
+                matches[i] = malloc(PATH_MAX);
+                if (last_slash) {
+                    // Include the full path for subdirectory completions
+                    char *base_path = strncpy(malloc(last_slash - path + 2), 
+                                           path, last_slash - path + 1);
+                    base_path[last_slash - path + 1] = '\0';
+                    
+                    if (S_ISDIR(st.st_mode)) {
+                        snprintf(matches[i], PATH_MAX, "%s%s/", 
+                                base_path, entry->d_name);
+                    } else {
+                        snprintf(matches[i], PATH_MAX, "%s%s", 
+                                base_path, entry->d_name);
+                    }
+                    free(base_path);
+                } else {
+                    if (S_ISDIR(st.st_mode)) {
+                        snprintf(matches[i], PATH_MAX, "%s/", entry->d_name);
+                    } else {
+                        snprintf(matches[i], PATH_MAX, "%s", entry->d_name);
+                    }
+                }
+                i++;
+            }
+        }
+    }
+    closedir(dir);
+    return matches;
 }
 
 static volatile int input_interrupted = 0;  // Add this global variable
@@ -65,50 +155,85 @@ char *read_input() {
                 printf("\033[D%s \033[%dD", buffer + cursor, pos - cursor + 1);
                 fflush(stdout);
             }
-        } else if (c == '\t') {
+        } else if (c == '\t') { // tab pressed
             buffer[pos] = '\0';
-            char *completion = history_find_match(buffer);
-            int file_completion_used = 0;
             
-            if (!completion) {
-                int token_start = pos;
-                while (token_start > 0 && buffer[token_start - 1] != ' ') {
-                    token_start--;
-                }
-                char *prefix = buffer + token_start;
-                char *file_completion = find_file_completion(prefix);
-                if (file_completion) {
-                    completion = file_completion;
-                    file_completion_used = 1;
-                }
+            // Find start of current token
+            int token_start = pos;
+            while (token_start > 0 && !isspace(buffer[token_start - 1])) {
+                token_start--;
             }
             
-            if (completion) {
-                if (!file_completion_used) {
-                    for (int i = 0; i < pos; i++) {
+            char *current_token = buffer + token_start;
+            int token_len = pos - token_start;
+            
+            int count;
+            char **matches = get_path_completions(current_token, &count);
+            
+            if (matches && count > 0) {
+                if (count == 1) {
+                    // Single match: replace current token
+                    int completion_len = strlen(matches[0]);
+                    
+                    // Erase current token
+                    for (int i = 0; i < token_len; i++) {
                         printf("\b \b");
                     }
-                    strcpy(buffer, completion);
-                    pos = strlen(buffer);
+                    
+                    // Make space for new content if needed
+                    if (pos + completion_len - token_len >= SHELL_MAX_INPUT) {
+                        completion_len = SHELL_MAX_INPUT - (pos - token_len);
+                    }
+                    
+                    // Move rest of line if needed
+                    if (pos > token_start + token_len) {
+                        memmove(buffer + token_start + completion_len,
+                                buffer + token_start + token_len,
+                                pos - (token_start + token_len));
+                    }
+                    
+                    // Insert completion
+                    strncpy(buffer + token_start, matches[0], completion_len);
+                    pos = token_start + completion_len;
                     cursor = pos;
-                    printf("%s", buffer);
+                    
+                    // Redraw the line
+                    printf("%s", matches[0]);
                 } else {
-                    int token_start = pos;
-                    while (token_start > 0 && buffer[token_start - 1] != ' ') {
-                        token_start--;
+                    // Multiple matches: show all and redraw current line
+                    printf("\n");
+                    for (int i = 0; i < count; i++) {
+                        printf("%s  ", matches[i]);
                     }
-                    for (int i = 0; i < pos - token_start; i++) {
+                    printf("\n%s%s", current_prompt, buffer);
+                }
+                
+                // Free matches
+                for (int i = 0; i < count; i++) {
+                    free(matches[i]);
+                }
+                free(matches);
+            } else {
+                // Try history completion
+                char *hist_match = history_find_match(current_token);
+                if (hist_match) {
+                    // Clear the entire current line
+                    while (pos > 0) {
                         printf("\b \b");
+                        pos--;
                     }
-                    buffer[token_start] = '\0';
-                    strcat(buffer, completion);
+                    
+                    // Copy the entire history line
+                    strncpy(buffer, hist_match, SHELL_MAX_INPUT - 1);
+                    buffer[SHELL_MAX_INPUT - 1] = '\0';
                     pos = strlen(buffer);
                     cursor = pos;
-                    printf("%s", buffer + token_start);
-                    free(completion);
+                    
+                    // Redraw the complete line
+                    printf("%s", buffer);
                 }
-                fflush(stdout);
             }
+            fflush(stdout);
         } else if (c == 27) { // handle escape sequences
             int next = getchar();
             if (next == '[') {
