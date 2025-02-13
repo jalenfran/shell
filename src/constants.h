@@ -1,0 +1,11 @@
+#ifndef SHELL_CONSTANTS_H
+#define SHELL_CONSTANTS_H
+
+#define SHELL_MAX_INPUT 1024
+#define MAX_ARGS 64
+#define MAX_HISTORY 100
+#define SHELL_PROMPT "jshell> "
+#define MAX_BACKGROUND_PROCESSES 64
+#define MAX_CMD_LEN 256
+
+#endif
