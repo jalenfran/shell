@@ -7,36 +7,51 @@
 #include <signal.h>
 #include "shell.h"
 
-// Add help command text
+// Help text for the shell
 static const char *HELP_TEXT = 
-    "\nJShell - A simple Unix shell implementation\n"
+    "\n\033[1;36m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m\n"
+    "\033[1;32mJShell v1.0\033[0m - A Modern Unix Shell Implementation\n"
     "Author: Jalen Francis\n"
-    "\nFeatures:\n"
-    "- Command execution with arguments\n"
-    "- Input/Output redirection (>, >>, <)\n"
-    "- Pipeline commands (|)\n"
-    "- Background processes (&)\n"
-    "- Environment variables (export, unset)\n"
-    "- History with up/down arrows\n"
-	"- Cursor with left/right arrows\n"
-    "- Tab completion\n"
-    "\nBuilt-in commands:\n"
-    "  help     - Show this help message\n"
-    "  cd       - Change directory\n"
-    "  exit     - Exit the shell\n"
-    "  env      - Show environment variables\n"
-    "  export   - Set environment variable\n"
-    "  unset    - Unset environment variable\n"
-    "  fg [job]  - Bring job to foreground\n"
-    "  bg [job]  - Continue job in background\n"
-    "  kill [job] - Terminate job\n"
-    "\nKey bindings:\n"
-    "  Ctrl+C   - Interrupt foreground process\n"
-    "  Ctrl+Z   - Suspend foreground process\n"
-    "  Up/Down  - Navigate command history\n"
-	"  Left/Right- Navigate cursor\n"
-    "  Tab      - Auto-complete commands and files\n\n";
+    "\n\033[1;33mCore Features:\033[0m\n"
+    "  • Command execution with argument handling\n"
+    "  • Input/Output redirection using >, >>, and <\n"
+    "  • Pipeline support using | operator\n"
+    "  • Background process execution using &\n"
+    "  • Environment variable management\n"
+    "  • Command history navigation\n"
+    "  • Tab completion for files and commands\n"
+    "\n\033[1;33mBuilt-in Commands:\033[0m\n"
+    "  \033[1mhelp\033[0m              Display this help message\n"
+    "  \033[1mcd\033[0m [dir]          Change current directory\n"
+    "  \033[1mexit\033[0m              Exit the shell\n"
+    "  \033[1menv\033[0m               Display all environment variables\n"
+    "  \033[1mexport\033[0m VAR=value  Set environment variable\n"
+    "  \033[1munset\033[0m VAR         Remove environment variable\n"
+    "\n\033[1;33mJob Control:\033[0m\n"
+    "  \033[1mfg\033[0m [%job]         Bring job to foreground\n"
+    "  \033[1mbg\033[0m [%job]         Continue job in background\n"
+    "  \033[1mkill\033[0m %job         Terminate specified job\n"
+    "\n\033[1;33mKey Bindings:\033[0m\n"
+    "  \033[1m↑/↓\033[0m               Browse command history\n"
+    "  \033[1m←/→\033[0m               Navigate cursor position\n"
+    "  \033[1mTab\033[0m               Auto-complete commands and files\n"
+    "  \033[1mCtrl+C\033[0m            Interrupt current process\n"
+    "  \033[1mCtrl+Z\033[0m            Suspend current process\n"
+    "\n\033[1;33mRedirection Examples:\033[0m\n"
+    "  command > file     Write output to file\n"
+    "  command >> file    Append output to file\n"
+    "  command < file     Read input from file\n"
+    "  cmd1 | cmd2        Pipe output of cmd1 to cmd2\n"
+    "\n\033[1;33mBackground Job Examples:\033[0m\n"
+    "  command &          Run in background\n"
+    "  fg %1             Resume job 1 in foreground\n"
+    "  bg %1             Resume job 1 in background\n"
+    "\033[1;36m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m\n";
 
+/**
+ * Executes a pipeline of two commands
+ * Creates pipe and forks processes for each command
+ */
 void execute_pipe(command_t *left, command_t *right) {
     int fd[2];
     if (pipe(fd) == -1) {
@@ -79,6 +94,10 @@ void execute_pipe(command_t *left, command_t *right) {
     waitpid(pid2, NULL, 0);
 }
 
+/**
+ * Continues a stopped job
+ * @param foreground: 1 for foreground, 0 for background
+ */
 void continue_job(pid_t pid, int foreground) {
     if (kill(-pid, SIGCONT) < 0) {
         perror("kill (SIGCONT)");
@@ -109,15 +128,14 @@ void kill_job(int job_id) {
     }
 }
 
-void execute_command(command_t *cmd) {
-    if (cmd->args[0] == NULL) {
-        return;
-    }
-	
-    // Handle built-in commands
+/**
+ * Handles execution of built-in commands
+ * Returns 1 if command was handled, 0 otherwise
+ */
+static int handle_builtin_command(command_t *cmd) {
     if (strcmp(cmd->args[0], "help") == 0) {
         printf("%s", HELP_TEXT);
-        return;
+        return 1;
     }
 
     // Add export command handling
@@ -135,7 +153,7 @@ void execute_command(command_t *cmd) {
                 fprintf(stderr, "export: invalid format (use VAR=value)\n");
             }
         }
-        return;
+        return 1;
     }
 
     // Add unset command handling
@@ -147,7 +165,7 @@ void execute_command(command_t *cmd) {
                 perror("unset failed");
             }
         }
-        return;
+        return 1;
     }
 
     // Add env command handling
@@ -156,7 +174,7 @@ void execute_command(command_t *cmd) {
         for (char **env = environ; *env; env++) {
             printf("%s\n", *env);
         }
-        return;
+        return 1;
     }
 
     if (strcmp(cmd->args[0], "cd") == 0) {
@@ -167,7 +185,7 @@ void execute_command(command_t *cmd) {
                 perror("cd: could not open directory");
             }
         }
-        return;
+        return 1;
     }
 
     // fg command
@@ -179,7 +197,7 @@ void execute_command(command_t *cmd) {
         } else {
             fprintf(stderr, "fg: no such job\n");
         }
-        return;
+        return 1;
     }
 
     // bg command
@@ -192,29 +210,43 @@ void execute_command(command_t *cmd) {
         } else {
             fprintf(stderr, "bg: no such job\n");
         }
-        return;
+        return 1;
     }
 
     // kill command
     if (strcmp(cmd->args[0], "kill") == 0) {
         if (!cmd->args[1]) {
             fprintf(stderr, "kill: usage: kill %%job_id\n");
-            return;
+            return 1;
         }
         int job_id = atoi(cmd->args[1] + 1);  // +1 to skip '%'
         kill_job(job_id);
-        return;
+        return 1;
     }
 
-    // Handle pipe commands
-    if (cmd->next != NULL) {
+    return 0;
+}
+
+/**
+ * Main command execution function
+ * Handles built-ins, pipes, and external commands
+ */
+void execute_command(command_t *cmd) {
+    if (!cmd->args[0]) return;
+
+    // Try built-in commands first
+    if (handle_builtin_command(cmd)) return;
+
+    // Handle pipes
+    if (cmd->next) {
         execute_pipe(cmd, cmd->next);
         return;
     }
 
+    // Execute external command
     pid_t pid = fork();
     if (pid == 0) {
-        // Child process
+        // Child process setup
         setpgid(0, 0);  // Create new process group
         
         // Reset all signal handlers to default
@@ -254,6 +286,7 @@ void execute_command(command_t *cmd) {
             exit(EXIT_FAILURE);
         }
     } else if (pid > 0) {
+        // Parent process handling
         setpgid(pid, pid);  // Put child in its own process group
 
         // Save command name immediately after fork for all processes

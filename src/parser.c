@@ -4,6 +4,10 @@
 #include <ctype.h>
 #include "shell.h"
 
+/**
+ * Expands environment variables in a token
+ * Converts $VAR to its value from environment
+ */
 static char *expand_env_vars(const char *token) {
     if (!token || !strchr(token, '$')) {
         return strdup(token);
@@ -34,17 +38,15 @@ static char *expand_env_vars(const char *token) {
     return result;
 }
 
+/**
+ * Parses input string into command structure
+ * Handles quotes, pipes, redirections, and background tasks
+ */
 command_t *parse_input(char *input) {
     command_t *cmd = malloc(sizeof(command_t));
-    if (!cmd) {
+    if (!cmd || !(cmd->args = malloc(MAX_ARGS * sizeof(char *)))) {
         perror("malloc failed");
-        return NULL;
-    }
-
-    cmd->args = malloc(MAX_ARGS * sizeof(char *));
-    if (!cmd->args) {
         free(cmd);
-        perror("malloc failed");
         return NULL;
     }
 
@@ -203,6 +205,9 @@ command_t *parse_input(char *input) {
     return cmd;
 }
 
+/**
+ * Frees all memory associated with a command structure
+ */
 void command_free(command_t *cmd) {
     if (cmd) {
         free(cmd->args);
