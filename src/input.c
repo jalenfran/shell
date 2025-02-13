@@ -64,7 +64,8 @@ char *read_input() {
 		perror("malloc failed");
 		exit(EXIT_FAILURE);
 	}
-	memset(buffer, 0, MAX_INPUT);
+	memset(buffer, 0, SHELL_MAX_INPUT);
+	int cursor = 0;
 	int pos = 0;
 	int c;
 	int hist_index = history_count;
@@ -75,10 +76,16 @@ char *read_input() {
 			putchar('\n');
 			break;
 		} else if (c == 127 || c == 8) { // backspace
-			if (pos > 0) {
+			if (cursor > 0) {
+				cursor--;
+				memmove(buffer + cursor, buffer + cursor + 1, pos-cursor);
 				pos--;
-				buffer[pos] = '\0';
-				printf("\b \b");
+				printf("\033[D");
+				printf("%s ", buffer + cursor);
+				int len = strlen(buffer + cursor);
+				for (int i = 0; i <= len; i++){
+					printf("\033[D");
+				}
 				fflush(stdout);
 			}
 		} else if (c == '\t') { // tab pressed
@@ -99,14 +106,12 @@ char *read_input() {
 			}
 			if (completion) {
 				if (!file_completion_used) {
-
-					// clear current input
-					while (pos > 0) {
+					for (int i = 0; i < pos; i++){
 						printf("\b \b");
-						pos--;
 					}
 					strcpy(buffer, completion);
 					pos = strlen(buffer);
+					cursor = pos;
 					printf("%s", buffer);
 					fflush(stdout);
 				} else {
@@ -114,12 +119,13 @@ char *read_input() {
 					while (token_start > 0 && buffer[token_start -1] != ' '){
 						token_start--;
 					}
-					while (pos > token_start) {
+					for (int i = 0; i < pos - token_start; i++){
 						printf("\b \b");
-						pos--;
 					}
-					strcpy(buffer + token_start, completion);
-					pos = token_start + strlen(completion);
+					buffer[token_start] = '\0';
+					strcat(buffer, completion);
+					pos = strlen(buffer);
+					cursor = pos;
 					printf("%s", buffer + token_start);
 					fflush(stdout);
 					free(completion);
@@ -130,16 +136,34 @@ char *read_input() {
 			int next = getchar();
 			if(next == '[') {
 				int arrow = getchar();
+				// left arow
+				if (arrow == 'D') {
+					if (cursor > 0) {
+						cursor--;
+						printf("\033[D");
+						fflush(stdout);
+					}
+				}
+				// right arrow
+				else if (arrow == 'C') {
+					if (cursor < pos) {
+						cursor++;
+						printf("\033[C");
+						fflush(stdout);
+					}
+				}
 				// up arrow
-				if (arrow == 'A') {
+				else if (arrow == 'A') {
 					if (history_count > 0 && hist_index > 0) {
 						hist_index--;
 						while (pos > 0) {
 							printf("\b \b");
 							pos--;
+							cursor = pos;
 						}
 						strcpy(buffer, history_list[hist_index]);
 						pos = strlen(buffer);
+						cursor = pos;
 						printf("%s", buffer);
 						fflush(stdout);
 					}
@@ -151,15 +175,18 @@ char *read_input() {
 						while (pos > 0) {
 							printf("\b \b");
 							pos--;
+							cursor = pos;
 						}
 						strcpy(buffer, history_list[hist_index]);
 						pos = strlen(buffer);
+						cursor = pos;
 						printf("%s", buffer);
 						fflush(stdout);
 					} else {
 						while (pos > 0) {
 							printf("\b \b");
 							pos--;
+							cursor = pos;
 						}
 						buffer[0] = '\0';
 						hist_index = history_count;
@@ -167,9 +194,23 @@ char *read_input() {
 				}
 			}
 		} else {
-			buffer[pos++] = c;
-			buffer[pos] = '\0';
-			putchar(c);
+			// insertion in the middle
+			if (cursor < pos) {
+				memmove(buffer + cursor + 1, buffer + cursor, pos - cursor + 1);
+				buffer[cursor] = c;
+				pos++;
+				printf("%s", buffer + cursor);
+				int tail_len = strlen(buffer + cursor) - 1;
+				for (int i = 0; i < tail_len; i++) {
+					printf("\033[D");
+				}
+				cursor++;
+			} else {
+				buffer[pos++] = c;
+				buffer[pos] = '\0';
+				putchar(c);
+				cursor++;
+			}
 			fflush(stdout);
 		}
 	}

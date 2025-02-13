@@ -14,9 +14,14 @@ void shell_loop() {
 	char *input;
 	char **args;
 	int status = 1;
+	char cwd[1024];
 
 	while (status) {
-		printf("jshell> ");
+		if (getcwd(cwd, sizeof(cwd)) == NULL) {
+			perror("getcwd error");
+			strcpy(cwd, "unknown");
+		}
+		printf("%s jshell> ", cwd);
 		fflush(stdout);
 		input = read_input();
 		args = parse_input(input);
