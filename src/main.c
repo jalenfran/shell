@@ -12,16 +12,18 @@
 static void sigchld_handler(int);
 static void sigint_handler(int);
 static void sigtstp_handler(int);
+static void sigterm_handler(int);
 
 // Change these from static to global
 int current_cursor_pos = 0;
-char current_prompt[1024];
+char current_prompt[SHELL_MAX_INPUT];
 
 #define MAX_BACKGROUND_PROCESSES 64
-#define MAX_CMD_LEN 256
 static pid_t background_processes[MAX_BACKGROUND_PROCESSES];
 static int num_background_processes = 0;
-static char current_command[MAX_CMD_LEN];
+
+// Define the global current_command variable (matches the extern declaration)
+char current_command[MAX_CMD_LEN];
 
 // Define these as global variables for input.c to use
 char current_input_buffer[SHELL_MAX_INPUT];
@@ -105,7 +107,7 @@ int get_pid_by_job_id(int job_id) {
 }
 
 void print_prompt(void) {
-    char cwd[1024];
+    char cwd[SHELL_MAX_INPUT];
     if (getcwd(cwd, sizeof(cwd)) == NULL) {
         perror("getcwd error");
         strcpy(cwd, "unknown");
@@ -163,13 +165,19 @@ static void sigchld_handler(int __attribute__((unused)) sig) {
     // Save current input state
     strncpy(saved_input, current_input_buffer, SHELL_MAX_INPUT);
     
+    // Use WNOHANG to prevent blocking
     while ((pid = waitpid(-1, &status, WNOHANG | WUNTRACED)) > 0) {
         if (WIFSTOPPED(status)) {
             if (!is_background_process(pid)) {
                 add_background_process(pid);
-                printf("\r\033[K[%d] Stopped %s\n", get_job_number(pid), get_process_command(pid));
+                printf("\r\033[K[%d] Stopped %s\n", get_job_number(pid), current_command);
             }
-        } else if (WIFEXITED(status) || WIFSIGNALED(status)) {
+        } else if (WIFSIGNALED(status)) {
+            printf("\r\033[KTerminated\n");
+            if (is_background_process(pid)) {
+                remove_background_process(pid);
+            }
+        } else if (WIFEXITED(status)) {
             if (is_background_process(pid)) {
                 printf("\r\033[K[%d] Done %s\n", get_job_number(pid), get_process_command(pid));
                 remove_background_process(pid);
@@ -200,11 +208,19 @@ static void sigchld_handler(int __attribute__((unused)) sig) {
 
 static void sigint_handler(int __attribute__((unused)) sig) {
     if (foreground_pid > 0) {
-        // If there's a foreground process, interrupt it
+        // Add to background list temporarily to track the command
+        add_background_process(foreground_pid);
+        
+        // Send interrupt signal
         kill(-foreground_pid, SIGINT);
-        printf("\n[%d] Terminated by interrupt: %s\n", get_job_number(foreground_pid), current_command);
+        
+        // Print message
+        printf("\r\033[KTerminated\n");
+        
+        // Remove from background list and clear foreground pid
+        remove_background_process(foreground_pid);
+        foreground_pid = 0;
     } else if (current_input_length > 0) {
-        // If user was typing something
         printf("\r\033[K^C\n");
     } else {
         printf("\r\033[K^C\n");
@@ -237,7 +253,16 @@ static void sigtstp_handler(int __attribute__((unused)) sig) {
     fflush(stdout);
 }
 
+// Add signal handler for SIGTERM
+static void sigterm_handler(int __attribute__((unused)) sig) {
+    cleanup_background_processes();
+    exit(EXIT_SUCCESS);
+}
+
 int main() {
+    // Set up SIGTERM handler
+    signal(SIGTERM, sigterm_handler);
+    
     shell_init();
     shell_loop();
     shell_cleanup();
@@ -275,6 +300,12 @@ void shell_init(void) {
         // Set up all signal handlers
         set_signal_handlers();
     }
+
+    struct sigaction sa;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = SA_RESTART | SA_NOCLDSTOP;  // Don't create zombies for stopped children
+    sa.sa_handler = sigchld_handler;
+    sigaction(SIGCHLD, &sa, NULL);
 
     history_init();
 }

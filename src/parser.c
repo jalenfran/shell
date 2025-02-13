@@ -60,88 +60,61 @@ command_t *parse_input(char *input) {
     char *token;
     int in_redir = 0, out_redir = 0;
     command_t *current = cmd;
-    char *input_ptr = input;
-    char token_buffer[SHELL_MAX_INPUT];
-    int token_pos = 0;
-    int in_quotes = 0;
 
-    while (*input_ptr && current->arg_count < MAX_ARGS - 1) {
-        if (*input_ptr == '"') {
-            in_quotes = !in_quotes;
-            input_ptr++;
+    token = strtok(input, " \t\r\n");  // Handle more whitespace characters
+    while (token != NULL && current->arg_count < MAX_ARGS - 1) {
+        // Handle variable assignment
+        char *equals = strchr(token, '=');
+        if (equals && token == equals - 1) {
+            continue;
+        } else if (equals) {
+            *equals = '\0';
+            setenv(token, equals + 1, 1);
+            token = strtok(NULL, " \t\r\n");
             continue;
         }
 
-        if (in_quotes) {
-            token_buffer[token_pos++] = *input_ptr++;
-            continue;
-        }
-
-        if (isspace(*input_ptr) && token_pos > 0) {
-            // End of token
-            token_buffer[token_pos] = '\0';
-            token_pos = 0;
-            
-            // Process the token
-            char *expanded = expand_env_vars(token_buffer);
-            
-            if (strcmp(expanded, "|") == 0) {
-                // Handle pipe
-                current->args[current->arg_count] = NULL;
-                current->next = malloc(sizeof(command_t));
-                current = current->next;
-                current->args = malloc(MAX_ARGS * sizeof(char *));
-                current->arg_count = 0;
-                current->command = NULL;
-                current->input_file = NULL;
-                current->output_file = NULL;
-                current->append_output = 0;
-                current->background = 0;
-                current->next = NULL;
-            } else if (strcmp(expanded, "<") == 0) {
-                in_redir = 1;
-            } else if (strcmp(expanded, ">") == 0) {
-                out_redir = 1;
-            } else if (strcmp(expanded, ">>") == 0) {
-                out_redir = 1;
-                current->append_output = 1;
-            } else if (strcmp(expanded, "&") == 0) {
-                current->background = 1;
-            } else if (in_redir) {
-                current->input_file = strdup(expanded);
-                in_redir = 0;
-            } else if (out_redir) {
-                current->output_file = strdup(expanded);
-                out_redir = 0;
-            } else {
-                current->args[current->arg_count] = strdup(expanded);
-                if (!current->command) {
-                    current->command = strdup(expanded);
-                }
-                current->arg_count++;
+        // Expand environment variables
+        char *expanded = expand_env_vars(token);
+        
+        if (strcmp(expanded, "|") == 0) {
+            // Handle pipe
+            current->args[current->arg_count] = NULL;
+            current->next = malloc(sizeof(command_t));
+            current = current->next;
+            current->args = malloc(MAX_ARGS * sizeof(char *));
+            current->arg_count = 0;
+            current->command = NULL;
+            current->input_file = NULL;
+            current->output_file = NULL;
+            current->append_output = 0;
+            current->background = 0;
+            current->next = NULL;
+        } else if (strcmp(expanded, "<") == 0) {
+            in_redir = 1;
+        } else if (strcmp(expanded, ">") == 0) {
+            out_redir = 1;
+        } else if (strcmp(expanded, ">>") == 0) {
+            out_redir = 1;
+            current->append_output = 1;
+        } else if (strcmp(expanded, "&") == 0) {
+            current->background = 1;
+        } else if (in_redir) {
+            current->input_file = strdup(expanded);
+            in_redir = 0;
+        } else if (out_redir) {
+            current->output_file = strdup(expanded);
+            out_redir = 0;
+        } else {
+            current->args[current->arg_count] = strdup(expanded);
+            if (!current->command) {
+                current->command = strdup(expanded);
             }
-            free(expanded);
-
-            while (isspace(*input_ptr)) input_ptr++;
-            continue;
+            current->arg_count++;
         }
-
-        if (!isspace(*input_ptr)) {
-            token_buffer[token_pos++] = *input_ptr;
-        }
-        input_ptr++;
-    }
-
-    // Handle last token if exists
-    if (token_pos > 0) {
-        token_buffer[token_pos] = '\0';
-        char *expanded = expand_env_vars(token_buffer);
-        current->args[current->arg_count] = strdup(expanded);
-        if (!current->command) {
-            current->command = strdup(expanded);
-        }
-        current->arg_count++;
+        
         free(expanded);
+        token = strtok(NULL, " \t\r\n");
     }
 
     current->args[current->arg_count] = NULL;

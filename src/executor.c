@@ -263,10 +263,9 @@ void execute_command(command_t *cmd) {
         // Save command name immediately after fork for all processes
         strncpy(current_command, cmd->args[0], MAX_CMD_LEN - 1);
         current_command[MAX_CMD_LEN - 1] = '\0';
-
+        
         if (!cmd->background) {
             set_foreground_pid(pid);
-            // Don't add foreground processes to background list unless stopped
             
             tcsetpgrp(STDIN_FILENO, pid);
             
@@ -277,7 +276,7 @@ void execute_command(command_t *cmd) {
             set_foreground_pid(0);  // Clear foreground pid
 
             if (WIFSTOPPED(status)) {
-                // Only add to background list if the process was stopped
+                // Only add to background list if process was stopped
                 add_background_process(pid);
                 printf("\n[%d] Stopped %s\n", get_job_number(pid), current_command);
             }
