@@ -58,6 +58,7 @@ A feature-rich Unix shell written in C that provides an interactive command-line
    ```
 
 ## 📁 Project Structure
+```
 shell/ 
 ├── src/ # Source code files 
 │ ├── main.c # Shell initialization and main loop 
@@ -76,4 +77,5 @@ shell/
 │ ├── parser.o 
 │ ├── input.o 
 │ └── history.o 
-├── Makefile # Build configuration 
+├── Makefile # Build configuration
+```
