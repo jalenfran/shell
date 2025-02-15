@@ -65,7 +65,18 @@ void list_jobs(void);
 // Alias recursion check
 int is_recursive_alias(const char *cmd, int depth);
 
+// Script execution functions
+int execute_script(const char *filename);
+int is_script_file(const char *filename);
+
+// RC file handling
+#define RC_FILE ".jshellrc"
+void load_rc_file(void);
+
 extern int num_background_processes;
 extern pid_t background_processes[];
+
+void history_show(int max_entries);
+int history_size(void);
 
 #endif

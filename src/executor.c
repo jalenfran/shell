@@ -8,6 +8,7 @@
 #include <ctype.h>
 #include "shell.h"
 #include "alias.h"
+#include "history.h"
 
 extern int num_background_processes;
 extern pid_t background_processes[];
@@ -37,6 +38,8 @@ static const char *HELP_TEXT =
     "  \033[1malias\033[0m [name='cmd'] Create/list command aliases\n"
     "  \033[1munalias\033[0m name      Remove an alias\n"
     "  \033[1mjobs\033[0m              List all background jobs\n"
+    "  \033[1mhistory\033[0m           Show entire command history\n"
+    "  \033[1mhistory\033[0m [n]       Show command history (last n entries)\n"
     "\n\033[1;33mJob Control:\033[0m\n"
     "  \033[1mfg\033[0m [%job]         Bring job to foreground\n"
     "  \033[1mbg\033[0m [%job]         Continue job in background\n"
@@ -70,13 +73,14 @@ static const char *HELP_TEXT =
  * Creates pipe and forks processes for each command
  */
 void execute_pipe(command_t *left, command_t *right) {
-    // Check for aliases in both commands before creating pipe
-    char *left_alias = alias_get(left->args[0]);
-    char *right_alias = alias_get(right->args[0]);
     command_t *left_cmd = left;
     command_t *right_cmd = right;
     int pipe_created = 0;
     int fd[2] = {-1, -1};
+    
+    // Check for aliases in both commands before creating pipe
+    char *left_alias = alias_get(left->args[0]);
+    char *right_alias = alias_get(right->args[0]);
     
     // Handle alias expansion
     if (left_alias) {
@@ -101,8 +105,10 @@ void execute_pipe(command_t *left, command_t *right) {
                 strcat(expanded, right->args[i]);
             }
             right_cmd = parse_input(expanded);
-            right_cmd->output_file = right->output_file;
-            right_cmd->append_output = right->append_output;
+            if (right_cmd) {
+                right_cmd->output_file = right->output_file ? strdup(right->output_file) : NULL;
+                right_cmd->append_output = right->append_output;
+            }
             free(expanded);
         }
     }
@@ -205,6 +211,25 @@ void kill_job(int job_id) {
  * Returns 1 if command was handled, 0 otherwise
  */
 static int handle_builtin_command(command_t *cmd) {
+    // Add history command handling at the start
+    if (strcmp(cmd->args[0], "history") == 0) {
+        int max_entries = history_size();  // Default to showing all entries
+        
+        if (cmd->args[1]) {
+            char *endptr;
+            long num = strtol(cmd->args[1], &endptr, 10);
+            if (*endptr == '\0' && num > 0) {
+                max_entries = (int)num;
+            } else {
+                fprintf(stderr, "history: numeric argument required\n");
+                return 1;
+            }
+        }
+        
+        history_show(max_entries);
+        return 1;
+    }
+
     // Add alias handling back first
     if (strcmp(cmd->args[0], "alias") == 0) {
         if (cmd->args[1] == NULL) {
@@ -449,6 +474,48 @@ void list_jobs(void) {
     if (num_background_processes == 0) {
         printf("No active jobs\n");
     }
+}
+
+int is_script_file(const char *filename) {
+    size_t len = strlen(filename);
+    return len > 4 && strcmp(filename + len - 4, ".jsh") == 0;
+}
+
+int execute_script(const char *filename) {
+    FILE *script = fopen(filename, "r");
+    if (!script) {
+        perror("Failed to open script");
+        return -1;
+    }
+
+    char line[SHELL_MAX_INPUT];
+    int line_num = 0;
+    
+    while (fgets(line, sizeof(line), script)) {
+        line_num++;
+        
+        // Remove trailing newline
+        size_t len = strlen(line);
+        if (len > 0 && line[len-1] == '\n') {
+            line[len-1] = '\0';
+        }
+        
+        // Skip empty lines and comments
+        if (line[0] == '\0' || line[0] == '#') {
+            continue;
+        }
+        
+        command_t *cmd = parse_input(line);
+        if (cmd) {
+            execute_command(cmd);
+            command_free(cmd);
+        } else {
+            fprintf(stderr, "Script error at line %d: Failed to parse command\n", line_num);
+        }
+    }
+
+    fclose(script);
+    return 0;
 }
 
 /**

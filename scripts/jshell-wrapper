@@ -1,0 +1,17 @@
+#!/bin/bash
+
+# Source RC file if it exists
+if [ -f ~/.jshellrc ]; then
+    source ~/.jshellrc
+fi
+
+# Ensure system paths are included
+export PATH="/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
+
+# Execute the binary
+if [ -x "$HOME/bin/jshell-bin" ]; then
+    exec "$HOME/bin/jshell-bin" "$@"
+else
+    echo "Error: jshell binary not found. Please run 'make' from the shell project directory."
+    exit 1
+fi

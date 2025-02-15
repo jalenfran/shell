@@ -1,0 +1,64 @@
+# JShell configuration file
+
+# Environment variables
+export EDITOR=vim
+export PAGER=less
+export HISTSIZE=1000
+
+# Common aliases
+alias ll='ls -l'
+alias gdk='ls'
+alias la='ls -la'
+alias l='ls -lh'
+alias ..='cd ..'
+alias ...='cd ../..'
+alias md='mkdir -p'
+alias rd='rmdir'
+alias df='df -h'
+alias du='du -h'
+alias grep='grep --color=auto'
+alias egrep='egrep --color=auto'
+alias fgrep='fgrep --color=auto'
+
+# Git aliases
+alias gs='git status'
+alias ga='git add'
+alias gc='git commit'
+alias gp='git push'
+alias gl='git log'
+
+# Custom functions (if supported)
+alias cls='clear'
+alias path='echo $PATH'
+
+# Safety aliases
+alias rm='rm -i'
+alias cp='cp -i'
+alias mv='mv -i'
+
+# Directory shortcuts
+alias home='cd ~'
+alias tmp='cd /tmp'
+
+# System info aliases
+alias meminfo='free -m'
+alias cpuinfo='cat /proc/cpuinfo'
+alias net='netstat -tuln'
+
+# Process management
+alias psa='ps aux'
+alias psg='ps aux | grep'
+
+# Default settings
+export LANG=en_US.UTF-8
+export TERM=xterm-256color
+
+# Add custom paths if needed
+# export PATH=$PATH:$HOME/bin
+
+# Show instructions when sourced directly
+if [ "$0" = "-bash" ] || [ "$0" = "/bin/bash" ] || [ "$0" = "/bin/zsh" ]; then
+    echo "JShell environment loaded."
+    echo "To start the shell, type: jshell"
+    echo "Make sure PATH includes $HOME/bin"
+fi

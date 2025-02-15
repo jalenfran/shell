@@ -259,11 +259,22 @@ static void sigterm_handler(int __attribute__((unused)) sig) {
     exit(EXIT_SUCCESS);
 }
 
-int main() {
+int main(int argc, char *argv[]) {
     // Set up SIGTERM handler
     signal(SIGTERM, sigterm_handler);
     
     shell_init();
+
+    // Check if a script file was provided
+    if (argc > 1) {
+        if (is_script_file(argv[1])) {
+            return execute_script(argv[1]);
+        } else {
+            fprintf(stderr, "Error: '%s' is not a .jsh script file\n", argv[1]);
+            return 1;
+        }
+    }
+
     shell_loop();
     shell_cleanup();
     return 0;
@@ -307,8 +318,28 @@ void shell_init(void) {
     sa.sa_handler = sigchld_handler;
     sigaction(SIGCHLD, &sa, NULL);
 
+    // Set shell name before loading RC file
+    setenv("SHELL_NAME", "jshell", 1);
+    
     history_init();
+    history_load();  // Load history at startup
     alias_init();
+    load_rc_file();
+
+    // Ensure PATH includes system directories
+    char *current_path = getenv("PATH");
+    if (current_path) {
+        char new_path[4096];
+        snprintf(new_path, sizeof(new_path), 
+                "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:%s", 
+                current_path);
+        setenv("PATH", new_path, 1);
+    } else {
+        setenv("PATH", "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin", 1);
+    }
+
+    // Add this before the first prompt
+    printf("Welcome to JShell! Type 'help' for available commands.\n");
 }
 
 // Update shell_loop to handle exit properly

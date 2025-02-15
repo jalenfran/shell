@@ -22,6 +22,15 @@ A feature-rich Unix shell written in C that provides an interactive command-line
 - Directory-aware path completion
 - Intelligent command suggestions
 
+### Scripting Features
+- Shell script support with `.jsh` extension
+- Environment variable expansion in scripts
+- Command pipelines and redirection
+- Background process management
+- Error reporting with line numbers
+- Comment support with #
+- Full access to built-in commands
+
 ### Built-in Commands
 | Command | Description |
 |---------|-------------|
@@ -34,6 +43,8 @@ A feature-rich Unix shell written in C that provides an interactive command-line
 | `alias name='cmd'` | Create or show aliases |
 | `unalias name` | Remove an alias |
 | `jobs` | List background jobs |
+| `history` | Lists all commands used |
+| `history [n]` | Lasts last n commands |
 | `fg [%job]` | Bring job to foreground |
 | `bg [%job]` | Continue job in background |
 | `kill %job` | Terminate specified job |
@@ -83,14 +94,37 @@ A feature-rich Unix shell written in C that provides an interactive command-line
    make
    ```
 
-3. Run the shell:
+### Running the Shell
+
+There are several ways to use JShell:
+
+1. Direct command (after installation):
+   ```bash
+   jshell
+   ```
+
+2. Development version:
    ```bash
    ./bin/jshell
    ```
 
+3. Running Scripts:
+   ```bash
+   # Method 1: Using jshell command
+   jshell script.jsh
+   
+   # Method 2: Make script executable
+   chmod +x script.jsh
+   ./script.jsh
+   ```
+
+### Script Example
+
 ## 📁 Project Structure
 ```
 shell/ 
+├── scripts/ # Directory for shell scripts
+│ └── jshell-wrapper # Wrapper script for JShell
 ├── src/ # Source code files 
 │ ├── alias.c # Alias management implementation
 │ ├── alias.h # Alias management declarations
@@ -101,6 +135,8 @@ shell/
 │ ├── input.c # Input handling and completion 
 │ ├── main.c # Shell initialization and main loop 
 │ ├── parser.c # Command parsing and tokenization 
+│ ├── rc.c # Configuration file handling
+│ ├── rc.h # Configuration file declarations
 │ ├── shell.h # Main header declarations 
 ├── bin/ # Binary output directory 
 │ └── jshell # Compiled executable (generated) 
@@ -111,5 +147,9 @@ shell/
 │ ├── input.o 
 │ ├── main.o 
 │ ├── parser.o 
+│ ├── rc.o 
+├── .gitignore # Git ignore file
+├── .jshellrc # JShell configuration file
+├── LICENSE # License file (MIT)
 ├── Makefile # Build configuration
 ```
