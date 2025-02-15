@@ -106,14 +106,21 @@ int get_pid_by_job_id(int job_id) {
 }
 
 void print_prompt(void) {
-    char cwd[SHELL_MAX_INPUT];
+    char cwd[PATH_MAX];
+    char current_prompt[MAX_PROMPT_LEN];
+    
     if (getcwd(cwd, sizeof(cwd)) == NULL) {
-        perror("getcwd error");
-        strcpy(cwd, "unknown");
+        strcpy(cwd, "???");
     }
-    snprintf(current_prompt, sizeof(current_prompt), "%s %s", cwd, SHELL_PROMPT);
-    printf("%s", current_prompt);
-    fflush(stdout);
+    
+    size_t prompt_result = snprintf(current_prompt, sizeof(current_prompt), "%s %s", cwd, SHELL_PROMPT);
+    if (prompt_result >= sizeof(current_prompt)) {
+        // Prompt too long, use fallback
+        printf("%s ", SHELL_PROMPT);
+        return;
+    }
+    
+    printf("%s ", current_prompt);
 }
 
 static void set_signal_handlers() {
