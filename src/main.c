@@ -18,7 +18,6 @@ static void sigterm_handler(int);
 int current_cursor_pos = 0;
 char current_prompt[SHELL_MAX_INPUT];
 
-#define MAX_BACKGROUND_PROCESSES 64
 pid_t background_processes[MAX_BACKGROUND_PROCESSES];
 int num_background_processes = 0;
 
