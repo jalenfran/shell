@@ -5,7 +5,12 @@
 #include <fcntl.h>
 #include <sys/wait.h>
 #include <signal.h>
+#include <ctype.h>
 #include "shell.h"
+#include "alias.h"
+
+extern int num_background_processes;
+extern pid_t background_processes[];
 
 // Help text for the shell
 static const char *HELP_TEXT = 
@@ -20,6 +25,8 @@ static const char *HELP_TEXT =
     "  • Environment variable management\n"
     "  • Command history navigation\n"
     "  • Tab completion for files and commands\n"
+    "  • Alias management with validation\n"
+    "  • Job control and process management\n"
     "\n\033[1;33mBuilt-in Commands:\033[0m\n"
     "  \033[1mhelp\033[0m              Display this help message\n"
     "  \033[1mcd\033[0m [dir]          Change current directory\n"
@@ -27,16 +34,24 @@ static const char *HELP_TEXT =
     "  \033[1menv\033[0m               Display all environment variables\n"
     "  \033[1mexport\033[0m VAR=value  Set environment variable\n"
     "  \033[1munset\033[0m VAR         Remove environment variable\n"
+    "  \033[1malias\033[0m [name='cmd'] Create/list command aliases\n"
+    "  \033[1munalias\033[0m name      Remove an alias\n"
+    "  \033[1mjobs\033[0m              List all background jobs\n"
     "\n\033[1;33mJob Control:\033[0m\n"
     "  \033[1mfg\033[0m [%job]         Bring job to foreground\n"
     "  \033[1mbg\033[0m [%job]         Continue job in background\n"
     "  \033[1mkill\033[0m %job         Terminate specified job\n"
+    "  \033[1mjobs\033[0m              List all background jobs\n"
     "\n\033[1;33mKey Bindings:\033[0m\n"
     "  \033[1m↑/↓\033[0m               Browse command history\n"
     "  \033[1m←/→\033[0m               Navigate cursor position\n"
     "  \033[1mTab\033[0m               Auto-complete commands and files\n"
     "  \033[1mCtrl+C\033[0m            Interrupt current process\n"
     "  \033[1mCtrl+Z\033[0m            Suspend current process\n"
+    "\n\033[1;33mAlias Examples:\033[0m\n"
+    "  alias ll='ls -l'    Create alias for long listing\n"
+    "  alias              Show all defined aliases\n"
+    "  unalias ll         Remove the ll alias\n"
     "\n\033[1;33mRedirection Examples:\033[0m\n"
     "  command > file     Write output to file\n"
     "  command >> file    Append output to file\n"
@@ -44,8 +59,10 @@ static const char *HELP_TEXT =
     "  cmd1 | cmd2        Pipe output of cmd1 to cmd2\n"
     "\n\033[1;33mBackground Job Examples:\033[0m\n"
     "  command &          Run in background\n"
+    "  jobs              List all background jobs\n"
     "  fg %1             Resume job 1 in foreground\n"
     "  bg %1             Resume job 1 in background\n"
+    "  kill %1           Terminate job 1\n"
     "\033[1;36m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m\n";
 
 /**
@@ -53,45 +70,100 @@ static const char *HELP_TEXT =
  * Creates pipe and forks processes for each command
  */
 void execute_pipe(command_t *left, command_t *right) {
-    int fd[2];
+    // Check for aliases in both commands before creating pipe
+    char *left_alias = alias_get(left->args[0]);
+    char *right_alias = alias_get(right->args[0]);
+    command_t *left_cmd = left;
+    command_t *right_cmd = right;
+    int pipe_created = 0;
+    int fd[2] = {-1, -1};
+    
+    // Handle alias expansion
+    if (left_alias) {
+        char *expanded = malloc(SHELL_MAX_INPUT);
+        if (expanded) {
+            snprintf(expanded, SHELL_MAX_INPUT, "%s", left_alias);
+            for (int i = 1; left->args[i]; i++) {
+                strcat(expanded, " ");
+                strcat(expanded, left->args[i]);
+            }
+            left_cmd = parse_input(expanded);
+            free(expanded);
+        }
+    }
+    
+    if (right_alias) {
+        char *expanded = malloc(SHELL_MAX_INPUT);
+        if (expanded) {
+            snprintf(expanded, SHELL_MAX_INPUT, "%s", right_alias);
+            for (int i = 1; right->args[i]; i++) {
+                strcat(expanded, " ");
+                strcat(expanded, right->args[i]);
+            }
+            right_cmd = parse_input(expanded);
+            right_cmd->output_file = right->output_file;
+            right_cmd->append_output = right->append_output;
+            free(expanded);
+        }
+    }
+
+    // Create pipe
     if (pipe(fd) == -1) {
         perror("pipe error");
-        return;
-    }
-
-    pid_t pid1 = fork();
-    if (pid1 < 0) {
-        perror("pipe fork error left");
-        return;
-    }
-    if (pid1 == 0) {
-        close(fd[0]);
-        dup2(fd[1], STDOUT_FILENO);
-        close(fd[1]);
-        if (execvp(left->args[0], left->args) == -1) {
+    } else {
+        pipe_created = 1;
+        
+        // First process
+        pid_t pid1 = fork();
+        if (pid1 == 0) {
+            close(fd[0]);
+            dup2(fd[1], STDOUT_FILENO);
+            close(fd[1]);
+            execvp(left_cmd->args[0], left_cmd->args);
             perror("execvp left pipe");
             exit(EXIT_FAILURE);
+        } else if (pid1 > 0) {
+            // Second process
+            pid_t pid2 = fork();
+            if (pid2 == 0) {
+                close(fd[1]);
+                dup2(fd[0], STDIN_FILENO);
+                close(fd[0]);
+                
+                // Handle output redirection
+                if (right->output_file != NULL) {
+                    int flags = O_CREAT | O_WRONLY;
+                    flags |= (right->append_output) ? O_APPEND : O_TRUNC;
+                    int fd_out = open(right->output_file, flags, 0644);
+                    if (fd_out >= 0) {
+                        dup2(fd_out, STDOUT_FILENO);
+                        close(fd_out);
+                    }
+                }
+                
+                execvp(right_cmd->args[0], right_cmd->args);
+                perror("execvp right pipe");
+                exit(EXIT_FAILURE);
+            } else if (pid2 > 0) {
+                close(fd[0]);
+                close(fd[1]);
+                waitpid(pid1, NULL, 0);
+                waitpid(pid2, NULL, 0);
+            }
         }
     }
 
-    pid_t pid2 = fork();
-    if (pid2 < 0) {
-        perror("pipe fork error right");
-        return;
+    // Cleanup
+    if (left_alias && left_cmd != left) {
+        command_free(left_cmd);
     }
-    if (pid2 == 0) {
-        close(fd[1]);
-        dup2(fd[0], STDIN_FILENO);
-        close(fd[0]);
-        if (execvp(right->args[0], right->args) == -1) {
-            perror("execvp right pipe");
-            exit(EXIT_FAILURE);
-        }
+    if (right_alias && right_cmd != right) {
+        command_free(right_cmd);
     }
-    close(fd[0]);
-    close(fd[1]);
-    waitpid(pid1, NULL, 0);
-    waitpid(pid2, NULL, 0);
+    if (pipe_created) {
+        if (fd[0] != -1) close(fd[0]);
+        if (fd[1] != -1) close(fd[1]);
+    }
 }
 
 /**
@@ -133,6 +205,105 @@ void kill_job(int job_id) {
  * Returns 1 if command was handled, 0 otherwise
  */
 static int handle_builtin_command(command_t *cmd) {
+    // Add alias handling back first
+    if (strcmp(cmd->args[0], "alias") == 0) {
+        if (cmd->args[1] == NULL) {
+            alias_list();
+        } else {
+            char *equals = strchr(cmd->args[1], '=');
+            if (equals) {
+                *equals = '\0';
+                char *name = cmd->args[1];
+                char *value = equals + 1;
+                
+                // Validate alias name
+                if (!is_valid_alias_name(name)) {
+                    fprintf(stderr, "alias: invalid alias name: %s\n", name);
+                    return 1;
+                }
+                
+                // Improve quote handling
+                if (*value == '\'' || *value == '"') {
+                    value++;  // Skip opening quote
+                    size_t len = strlen(value);
+                    if (len > 0 && (value[len-1] == '\'' || value[len-1] == '"')) {
+                        value[len-1] = '\0';  // Remove closing quote
+                    }
+                }
+                
+                // Strip extra whitespace and validate value
+                while (*value && isspace(*value)) value++;
+                char *end = value + strlen(value) - 1;
+                while (end > value && isspace(*end)) *end-- = '\0';
+                
+                // Check for empty value
+                if (!*value) {
+                    fprintf(stderr, "alias: empty alias value not allowed\n");
+                    return 1;
+                }
+                
+                alias_add(name, value);
+            } else {
+                char *alias_value = alias_get(cmd->args[1]);
+                if (alias_value) {
+                    printf("alias %s='%s'\n", cmd->args[1], alias_value);
+                } else {
+                    fprintf(stderr, "alias: %s not found\n", cmd->args[1]);
+                }
+            }
+        }
+        return 1;
+    }
+
+    if (strcmp(cmd->args[0], "unalias") == 0) {
+        if (cmd->args[1]) {
+            alias_remove(cmd->args[1]);
+        } else {
+            fprintf(stderr, "unalias: missing argument\n");
+        }
+        return 1;
+    }
+
+    // Check for alias expansion
+    if (cmd->args[0]) {
+        char *alias_cmd = alias_get(cmd->args[0]);
+        if (alias_cmd && !is_recursive_alias(cmd->args[0], 0)) {
+            // Create a new command with the alias expansion
+            char *expanded = malloc(SHELL_MAX_INPUT);
+            
+            // First copy the alias command
+            strncpy(expanded, alias_cmd, SHELL_MAX_INPUT - 1);
+            
+            // Then append any additional arguments
+            for (int i = 1; cmd->args[i]; i++) {
+                strcat(expanded, " ");
+                strcat(expanded, cmd->args[i]);
+            }
+            
+            // Parse the expanded command
+            command_t *new_cmd = parse_input(expanded);
+            free(expanded);
+            
+            if (new_cmd) {
+                // If original command had redirection, merge it with new command
+                if (!new_cmd->output_file && cmd->output_file) {
+                    new_cmd->output_file = strdup(cmd->output_file);
+                    new_cmd->append_output = cmd->append_output;
+                }
+                if (!new_cmd->input_file && cmd->input_file) {
+                    new_cmd->input_file = strdup(cmd->input_file);
+                }
+                
+                // Copy background state
+                new_cmd->background = cmd->background;
+                
+                execute_command(new_cmd);
+                command_free(new_cmd);
+                return 1;
+            }
+        }
+    }
+
     if (strcmp(cmd->args[0], "help") == 0) {
         printf("%s", HELP_TEXT);
         return 1;
@@ -224,7 +395,60 @@ static int handle_builtin_command(command_t *cmd) {
         return 1;
     }
 
+    // Add this before the return 0
+    if (strcmp(cmd->args[0], "jobs") == 0) {
+        list_jobs();
+        return 1;
+    }
+
     return 0;
+}
+
+// Move helper function definition before it's used
+int is_recursive_alias(const char *cmd, int depth) {
+    if (depth > 10) return 1; // Prevent deep recursion
+    
+    char *alias_cmd = alias_get(cmd);
+    if (!alias_cmd) return 0;
+    
+    // Parse the alias command to get the first word
+    char *temp = strdup(alias_cmd);
+    char *first_word = strtok(temp, " \t\n");
+    
+    if (!first_word) {
+        free(temp);
+        return 0;
+    }
+    
+    // Check if the first word matches the original command
+    int is_recursive = (strcmp(cmd, first_word) == 0) || 
+                      is_recursive_alias(first_word, depth + 1);
+    
+    free(temp);
+    return is_recursive;
+}
+
+// Add this function implementation
+void list_jobs(void) {
+    for (int i = 0; i < num_background_processes; i++) {
+        pid_t pid = background_processes[i];
+        // Check if process is still running
+        int status;
+        pid_t result = waitpid(pid, &status, WNOHANG);
+        
+        if (result == 0) {
+            // Process is still running
+            printf("[%d] Running\t%s (pid: %d)\n", 
+                   i + 1, get_process_command(pid), pid);
+        } else if (WIFSTOPPED(status)) {
+            // Process is stopped
+            printf("[%d] Stopped\t%s (pid: %d)\n", 
+                   i + 1, get_process_command(pid), pid);
+        }
+    }
+    if (num_background_processes == 0) {
+        printf("No active jobs\n");
+    }
 }
 
 /**

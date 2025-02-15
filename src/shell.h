@@ -51,4 +51,21 @@ void command_free(command_t *cmd);
 // Tab completion
 char **get_path_completions(const char *path, int *count);
 
+// Alias management functions
+void alias_init(void);
+void alias_add(const char *name, const char *command);
+void alias_remove(const char *name);
+char *alias_get(const char *name);
+void alias_list(void);
+void alias_cleanup(void);
+
+// Add this function declaration before #endif
+void list_jobs(void);
+
+// Alias recursion check
+int is_recursive_alias(const char *cmd, int depth);
+
+extern int num_background_processes;
+extern pid_t background_processes[];
+
 #endif

@@ -19,8 +19,8 @@ int current_cursor_pos = 0;
 char current_prompt[SHELL_MAX_INPUT];
 
 #define MAX_BACKGROUND_PROCESSES 64
-static pid_t background_processes[MAX_BACKGROUND_PROCESSES];
-static int num_background_processes = 0;
+pid_t background_processes[MAX_BACKGROUND_PROCESSES];
+int num_background_processes = 0;
 
 // Define the global current_command variable (matches the extern declaration)
 char current_command[MAX_CMD_LEN];
@@ -308,6 +308,7 @@ void shell_init(void) {
     sigaction(SIGCHLD, &sa, NULL);
 
     history_init();
+    alias_init();
 }
 
 // Update shell_loop to handle exit properly
@@ -349,6 +350,7 @@ void shell_loop(void) {
 }
 
 void shell_cleanup(void) {
+    alias_cleanup();
     cleanup_background_processes();
     history_cleanup();
 }
