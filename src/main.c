@@ -5,8 +5,12 @@
 #include <sys/wait.h>
 #include <signal.h>
 #include <termios.h>
+
+// Project headers
 #include "shell.h"
 #include "history.h"
+#include "alias.h"
+#include "job_observer.h"  // Add this line
 
 // Add signal handler declarations at the top before any functions
 static void sigchld_handler(int);
@@ -315,6 +319,7 @@ void shell_init(void) {
     history_init();
     alias_init();
     command_registry_init();
+    job_observer_init();  // Add this line
     register_builtin_commands();
 
     // Set environment variables
@@ -339,6 +344,7 @@ void shell_cleanup(void) {
     history_cleanup();
     alias_cleanup();
     command_registry_cleanup();
+    job_observer_cleanup();  // Add this line
     cleanup_background_processes();
     
     // Reset terminal control
