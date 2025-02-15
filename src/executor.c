@@ -13,61 +13,6 @@
 extern int num_background_processes;
 extern pid_t background_processes[];
 
-// Help text for the shell
-static const char *HELP_TEXT = 
-    "\n\033[1;36m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m\n"
-    "\033[1;32mJShell v1.0\033[0m - A Modern Unix Shell Implementation\n"
-    "Author: Jalen Francis\n"
-    "\n\033[1;33mCore Features:\033[0m\n"
-    "  • Command execution with argument handling\n"
-    "  • Input/Output redirection using >, >>, and <\n"
-    "  • Pipeline support using | operator\n"
-    "  • Background process execution using &\n"
-    "  • Environment variable management\n"
-    "  • Command history navigation\n"
-    "  • Tab completion for files and commands\n"
-    "  • Alias management with validation\n"
-    "  • Job control and process management\n"
-    "\n\033[1;33mBuilt-in Commands:\033[0m\n"
-    "  \033[1mhelp\033[0m              Display this help message\n"
-    "  \033[1mcd\033[0m [dir]          Change current directory\n"
-    "  \033[1mexit\033[0m              Exit the shell\n"
-    "  \033[1menv\033[0m               Display all environment variables\n"
-    "  \033[1mexport\033[0m VAR=value  Set environment variable\n"
-    "  \033[1munset\033[0m VAR         Remove environment variable\n"
-    "  \033[1malias\033[0m [name='cmd'] Create/list command aliases\n"
-    "  \033[1munalias\033[0m name      Remove an alias\n"
-    "  \033[1mjobs\033[0m              List all background jobs\n"
-    "  \033[1mhistory\033[0m           Show entire command history\n"
-    "  \033[1mhistory\033[0m [n]       Show command history (last n entries)\n"
-    "\n\033[1;33mJob Control:\033[0m\n"
-    "  \033[1mfg\033[0m [%job]         Bring job to foreground\n"
-    "  \033[1mbg\033[0m [%job]         Continue job in background\n"
-    "  \033[1mkill\033[0m %job         Terminate specified job\n"
-    "  \033[1mjobs\033[0m              List all background jobs\n"
-    "\n\033[1;33mKey Bindings:\033[0m\n"
-    "  \033[1m↑/↓\033[0m               Browse command history\n"
-    "  \033[1m←/→\033[0m               Navigate cursor position\n"
-    "  \033[1mTab\033[0m               Auto-complete commands and files\n"
-    "  \033[1mCtrl+C\033[0m            Interrupt current process\n"
-    "  \033[1mCtrl+Z\033[0m            Suspend current process\n"
-    "\n\033[1;33mAlias Examples:\033[0m\n"
-    "  alias ll='ls -l'    Create alias for long listing\n"
-    "  alias              Show all defined aliases\n"
-    "  unalias ll         Remove the ll alias\n"
-    "\n\033[1;33mRedirection Examples:\033[0m\n"
-    "  command > file     Write output to file\n"
-    "  command >> file    Append output to file\n"
-    "  command < file     Read input from file\n"
-    "  cmd1 | cmd2        Pipe output of cmd1 to cmd2\n"
-    "\n\033[1;33mBackground Job Examples:\033[0m\n"
-    "  command &          Run in background\n"
-    "  jobs              List all background jobs\n"
-    "  fg %1             Resume job 1 in foreground\n"
-    "  bg %1             Resume job 1 in background\n"
-    "  kill %1           Terminate job 1\n"
-    "\033[1;36m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m\n";
-
 /**
  * Executes a pipeline of two commands
  * Creates pipe and forks processes for each command
@@ -206,227 +151,272 @@ void kill_job(int job_id) {
     }
 }
 
-/**
- * Handles execution of built-in commands
- * Returns 1 if command was handled, 0 otherwise
- */
-static int handle_builtin_command(command_t *cmd) {
-    // Add history command handling at the start
-    if (strcmp(cmd->args[0], "history") == 0) {
-        int max_entries = history_size();  // Default to showing all entries
-        
-        if (cmd->args[1]) {
-            char *endptr;
-            long num = strtol(cmd->args[1], &endptr, 10);
-            if (*endptr == '\0' && num > 0) {
-                max_entries = (int)num;
-            } else {
-                fprintf(stderr, "history: numeric argument required\n");
-                return 1;
-            }
-        }
-        
-        history_show(max_entries);
-        return 1;
-    }
+// Update function declarations to use command_t directly
+static int cmd_help(command_t *cmd);
+static int cmd_cd(command_t *cmd);
+static int cmd_exit(command_t *cmd);
+static int cmd_history(command_t *cmd);
+static int cmd_alias(command_t *cmd);
+static int cmd_unalias(command_t *cmd);
+static int cmd_export(command_t *cmd);
+static int cmd_unset(command_t *cmd);
+static int cmd_env(command_t *cmd);
+static int cmd_jobs(command_t *cmd);
+static int cmd_fg(command_t *cmd);
+static int cmd_bg(command_t *cmd);
+static int cmd_kill(command_t *cmd);
 
-    // Add alias handling back first
-    if (strcmp(cmd->args[0], "alias") == 0) {
-        if (cmd->args[1] == NULL) {
-            alias_list();
+// Replace handle_builtin_command with this simpler version
+static int handle_builtin_command(struct command_t *cmd) {
+    return execute_builtin(cmd);
+}
+
+// Add this function to register all built-in commands
+void register_builtin_commands(void) {
+    command_registry_init();
+    
+    register_command("help", cmd_help, "Display help information");
+    register_command("cd", cmd_cd, "Change directory");
+    register_command("exit", cmd_exit, "Exit the shell");
+    register_command("history", cmd_history, "Show command history");
+    register_command("alias", cmd_alias, "Create or list aliases");
+    register_command("unalias", cmd_unalias, "Remove an alias");
+    register_command("export", cmd_export, "Set environment variable");
+    register_command("unset", cmd_unset, "Unset environment variable");
+    register_command("env", cmd_env, "Display environment variables");
+    register_command("jobs", cmd_jobs, "List background jobs");
+    register_command("fg", cmd_fg, "Bring job to foreground");
+    register_command("bg", cmd_bg, "Continue job in background");
+    register_command("kill", cmd_kill, "Kill a job");
+}
+
+// Implement command handlers
+static int cmd_help(command_t *cmd) {
+    (void)cmd; // Unused parameter
+    
+    static const char *HELP_TEXT = 
+        "\n\033[1;36m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m\n"
+        "\033[1;32mJShell v1.0\033[0m - A Modern Unix Shell Implementation\n"
+        "Author: Jalen Francis\n"
+        "\n\033[1;33mCore Features:\033[0m\n"
+        "  • Command execution with argument handling\n"
+        "  • Input/Output redirection using >, >>, and <\n"
+        "  • Pipeline support using | operator\n"
+        "  • Background process execution using &\n"
+        "  • Environment variable management\n"
+        "  • Command history navigation\n"
+        "  • Tab completion for files and commands\n"
+        "  • Alias management with validation\n"
+        "  • Job control and process management\n"
+        "\n\033[1;33mBuilt-in Commands:\033[0m\n"
+        "  \033[1mhelp\033[0m              Display this help message\n"
+        "  \033[1mcd\033[0m [dir]          Change current directory\n"
+        "  \033[1mexit\033[0m              Exit the shell\n"
+        "  \033[1menv\033[0m               Display all environment variables\n"
+        "  \033[1mexport\033[0m VAR=value  Set environment variable\n"
+        "  \033[1munset\033[0m VAR         Remove environment variable\n"
+        "  \033[1malias\033[0m [name='cmd'] Create/list command aliases\n"
+        "  \033[1munalias\033[0m name      Remove an alias\n"
+        "  \033[1mjobs\033[0m              List all background jobs\n"
+        "  \033[1mhistory\033[0m           Show entire command history\n"
+        "  \033[1mhistory\033[0m [n]       Show command history (last n entries)\n"
+        "\n\033[1;33mJob Control:\033[0m\n"
+        "  \033[1mfg\033[0m [%job]         Bring job to foreground\n"
+        "  \033[1mbg\033[0m [%job]         Continue job in background\n"
+        "  \033[1mkill\033[0m %job         Terminate specified job\n"
+        "  \033[1mjobs\033[0m              List all background jobs\n"
+        "\n\033[1;33mKey Bindings:\033[0m\n"
+        "  \033[1m↑/↓\033[0m               Browse command history\n"
+        "  \033[1m←/→\033[0m               Navigate cursor position\n"
+        "  \033[1mTab\033[0m               Auto-complete commands and files\n"
+        "  \033[1mCtrl+C\033[0m            Interrupt current process\n"
+        "  \033[1mCtrl+Z\033[0m            Suspend current process\n"
+        "\n\033[1;33mAlias Examples:\033[0m\n"
+        "  alias ll='ls -l'    Create alias for long listing\n"
+        "  alias              Show all defined aliases\n"
+        "  unalias ll         Remove the ll alias\n"
+        "\n\033[1;33mRedirection Examples:\033[0m\n"
+        "  command > file     Write output to file\n"
+        "  command >> file    Append output to file\n"
+        "  command < file     Read input from file\n"
+        "  cmd1 | cmd2        Pipe output of cmd1 to cmd2\n"
+        "\n\033[1;33mBackground Job Examples:\033[0m\n"
+        "  command &          Run in background\n"
+        "  jobs              List all background jobs\n"
+        "  fg %1             Resume job 1 in foreground\n"
+        "  bg %1             Resume job 1 in background\n"
+        "  kill %1           Terminate job 1\n"
+        "\033[1;36m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m\n";
+    
+    printf("%s", HELP_TEXT);
+    list_commands();
+    return 1;
+}
+
+static int cmd_cd(command_t *cmd) {
+    if (cmd->args[1] == NULL) {
+        fprintf(stderr, "cd: expected argument\n");
+    } else if (chdir(cmd->args[1]) != 0) {
+        perror("cd");
+    }
+    return 1;
+}
+
+static int cmd_exit(command_t *cmd) {
+    (void)cmd; // Unused parameter
+    cleanup_background_processes();
+    command_registry_cleanup();
+    exit(0);
+    return 1;
+}
+
+static int cmd_history(command_t *cmd) {
+    int max_entries = history_size();
+    
+    if (cmd->args[1]) {
+        char *endptr;
+        long num = strtol(cmd->args[1], &endptr, 10);
+        if (*endptr == '\0' && num > 0) {
+            max_entries = (int)num;
         } else {
-            char *equals = strchr(cmd->args[1], '=');
-            if (equals) {
-                *equals = '\0';
-                char *name = cmd->args[1];
-                char *value = equals + 1;
-                
-                // Validate alias name
-                if (!is_valid_alias_name(name)) {
-                    fprintf(stderr, "alias: invalid alias name: %s\n", name);
-                    return 1;
-                }
-                
-                // Improve quote handling
-                if (*value == '\'' || *value == '"') {
-                    value++;  // Skip opening quote
-                    size_t len = strlen(value);
-                    if (len > 0 && (value[len-1] == '\'' || value[len-1] == '"')) {
-                        value[len-1] = '\0';  // Remove closing quote
-                    }
-                }
-                
-                // Strip extra whitespace and validate value
-                while (*value && isspace(*value)) value++;
-                char *end = value + strlen(value) - 1;
-                while (end > value && isspace(*end)) *end-- = '\0';
-                
-                // Check for empty value
-                if (!*value) {
-                    fprintf(stderr, "alias: empty alias value not allowed\n");
-                    return 1;
-                }
-                
-                alias_add(name, value);
-            } else {
-                char *alias_value = alias_get(cmd->args[1]);
-                if (alias_value) {
-                    printf("alias %s='%s'\n", cmd->args[1], alias_value);
-                } else {
-                    fprintf(stderr, "alias: %s not found\n", cmd->args[1]);
-                }
-            }
-        }
-        return 1;
-    }
-
-    if (strcmp(cmd->args[0], "unalias") == 0) {
-        if (cmd->args[1]) {
-            alias_remove(cmd->args[1]);
-        } else {
-            fprintf(stderr, "unalias: missing argument\n");
-        }
-        return 1;
-    }
-
-    // Check for alias expansion
-    if (cmd->args[0]) {
-        char *alias_cmd = alias_get(cmd->args[0]);
-        if (alias_cmd && !is_recursive_alias(cmd->args[0], 0)) {
-            // Create a new command with the alias expansion
-            char *expanded = malloc(SHELL_MAX_INPUT);
-            
-            // First copy the alias command
-            strncpy(expanded, alias_cmd, SHELL_MAX_INPUT - 1);
-            
-            // Then append any additional arguments
-            for (int i = 1; cmd->args[i]; i++) {
-                strcat(expanded, " ");
-                strcat(expanded, cmd->args[i]);
-            }
-            
-            // Parse the expanded command
-            command_t *new_cmd = parse_input(expanded);
-            free(expanded);
-            
-            if (new_cmd) {
-                // If original command had redirection, merge it with new command
-                if (!new_cmd->output_file && cmd->output_file) {
-                    new_cmd->output_file = strdup(cmd->output_file);
-                    new_cmd->append_output = cmd->append_output;
-                }
-                if (!new_cmd->input_file && cmd->input_file) {
-                    new_cmd->input_file = strdup(cmd->input_file);
-                }
-                
-                // Copy background state
-                new_cmd->background = cmd->background;
-                
-                execute_command(new_cmd);
-                command_free(new_cmd);
-                return 1;
-            }
-        }
-    }
-
-    if (strcmp(cmd->args[0], "help") == 0) {
-        printf("%s", HELP_TEXT);
-        return 1;
-    }
-
-    // Add export command handling
-    if (strcmp(cmd->args[0], "export") == 0) {
-        if (cmd->args[1] == NULL) {
-            fprintf(stderr, "export: missing variable assignment\n");
-        } else {
-            char *equals = strchr(cmd->args[1], '=');
-            if (equals) {
-                *equals = '\0';  // Split string at '='
-                if (setenv(cmd->args[1], equals + 1, 1) != 0) {
-                    perror("export failed");
-                }
-            } else {
-                fprintf(stderr, "export: invalid format (use VAR=value)\n");
-            }
-        }
-        return 1;
-    }
-
-    // Add unset command handling
-    if (strcmp(cmd->args[0], "unset") == 0) {
-        if (cmd->args[1] == NULL) {
-            fprintf(stderr, "unset: missing variable name\n");
-        } else {
-            if (unsetenv(cmd->args[1]) != 0) {
-                perror("unset failed");
-            }
-        }
-        return 1;
-    }
-
-    // Add env command handling
-    if (strcmp(cmd->args[0], "env") == 0) {
-        extern char **environ;
-        for (char **env = environ; *env; env++) {
-            printf("%s\n", *env);
-        }
-        return 1;
-    }
-
-    if (strcmp(cmd->args[0], "cd") == 0) {
-        if (cmd->args[1] == NULL) {
-            fprintf(stderr, "cd: expected argument\n");
-        } else {
-            if (chdir(cmd->args[1]) != 0) {
-                perror("cd: could not open directory");
-            }
-        }
-        return 1;
-    }
-
-    // fg command
-    if (strcmp(cmd->args[0], "fg") == 0) {
-        int job_id = cmd->args[1] ? atoi(cmd->args[1] + 1) : 1;  // +1 to skip '%'
-        pid_t pid = get_pid_by_job_id(job_id);
-        if (pid > 0) {
-            continue_job(pid, 1);  // 1 means foreground
-        } else {
-            fprintf(stderr, "fg: no such job\n");
-        }
-        return 1;
-    }
-
-    // bg command
-    if (strcmp(cmd->args[0], "bg") == 0) {
-        int job_id = cmd->args[1] ? atoi(cmd->args[1] + 1) : 1;
-        pid_t pid = get_pid_by_job_id(job_id);
-        if (pid > 0) {
-            continue_job(pid, 0);  // 0 means background
-            printf("[%d] %s &\n", job_id, get_process_command(pid));
-        } else {
-            fprintf(stderr, "bg: no such job\n");
-        }
-        return 1;
-    }
-
-    // kill command
-    if (strcmp(cmd->args[0], "kill") == 0) {
-        if (!cmd->args[1]) {
-            fprintf(stderr, "kill: usage: kill %%job_id\n");
+            fprintf(stderr, "history: numeric argument required\n");
             return 1;
         }
-        int job_id = atoi(cmd->args[1] + 1);  // +1 to skip '%'
-        kill_job(job_id);
+    }
+    history_show(max_entries);
+    return 1;
+}
+
+static int cmd_alias(command_t *cmd) {
+    if (cmd->args[1] == NULL) {
+        alias_list();
         return 1;
     }
+    
+    char *equals = strchr(cmd->args[1], '=');
+    if (equals) {
+        *equals = '\0';
+        char *name = cmd->args[1];
+        char *value = equals + 1;
+        
+        if (!is_valid_alias_name(name)) {
+            fprintf(stderr, "alias: invalid alias name: %s\n", name);
+            return 1;
+        }
+        
+        if (*value == '\'' || *value == '"') {
+            value++;
+            size_t len = strlen(value);
+            if (len > 0 && (value[len-1] == '\'' || value[len-1] == '"')) {
+                value[len-1] = '\0';
+            }
+        }
+        
+        while (*value && isspace(*value)) value++;
+        char *end = value + strlen(value) - 1;
+        while (end > value && isspace(*end)) *end-- = '\0';
+        
+        if (!*value) {
+            fprintf(stderr, "alias: empty alias value not allowed\n");
+            return 1;
+        }
+        
+        alias_add(name, value);
+    } else {
+        char *alias_value = alias_get(cmd->args[1]);
+        if (alias_value) {
+            printf("alias %s='%s'\n", cmd->args[1], alias_value);
+        } else {
+            fprintf(stderr, "alias: %s not found\n", cmd->args[1]);
+        }
+    }
+    return 1;
+}
 
-    // Add this before the return 0
-    if (strcmp(cmd->args[0], "jobs") == 0) {
-        list_jobs();
+static int cmd_unalias(command_t *cmd) {
+    if (!cmd->args[1]) {
+        fprintf(stderr, "unalias: missing argument\n");
         return 1;
     }
+    alias_remove(cmd->args[1]);
+    return 1;
+}
 
-    return 0;
+static int cmd_export(command_t *cmd) {
+    if (!cmd->args[1]) {
+        fprintf(stderr, "export: missing variable assignment\n");
+        return 1;
+    }
+    
+    char *equals = strchr(cmd->args[1], '=');
+    if (equals) {
+        *equals = '\0';
+        if (setenv(cmd->args[1], equals + 1, 1) != 0) {
+            perror("export failed");
+        }
+    } else {
+        fprintf(stderr, "export: invalid format (use VAR=value)\n");
+    }
+    return 1;
+}
+
+static int cmd_unset(command_t *cmd) {
+    if (!cmd->args[1]) {
+        fprintf(stderr, "unset: missing variable name\n");
+        return 1;
+    }
+    if (unsetenv(cmd->args[1]) != 0) {
+        perror("unset failed");
+    }
+    return 1;
+}
+
+static int cmd_env(command_t *cmd) {
+    (void)cmd;
+    extern char **environ;
+    for (char **env = environ; *env; env++) {
+        printf("%s\n", *env);
+    }
+    return 1;
+}
+
+static int cmd_jobs(command_t *cmd) {
+    (void)cmd;
+    list_jobs();
+    return 1;
+}
+
+static int cmd_fg(command_t *cmd) {
+    int job_id = cmd->args[1] ? atoi(cmd->args[1] + 1) : 1;
+    pid_t pid = get_pid_by_job_id(job_id);
+    if (pid > 0) {
+        continue_job(pid, 1);
+    } else {
+        fprintf(stderr, "fg: no such job\n");
+    }
+    return 1;
+}
+
+static int cmd_bg(command_t *cmd) {
+    int job_id = cmd->args[1] ? atoi(cmd->args[1] + 1) : 1;
+    pid_t pid = get_pid_by_job_id(job_id);
+    if (pid > 0) {
+        continue_job(pid, 0);
+        printf("[%d] %s &\n", job_id, get_process_command(pid));
+    } else {
+        fprintf(stderr, "bg: no such job\n");
+    }
+    return 1;
+}
+
+static int cmd_kill(command_t *cmd) {
+    if (!cmd->args[1]) {
+        fprintf(stderr, "kill: usage: kill %%job_id\n");
+        return 1;
+    }
+    int job_id = atoi(cmd->args[1] + 1);
+    kill_job(job_id);
+    return 1;
 }
 
 // Move helper function definition before it's used
@@ -525,7 +515,34 @@ int execute_script(const char *filename) {
 void execute_command(command_t *cmd) {
     if (!cmd->args[0]) return;
 
-    // Try built-in commands first
+    // Try to expand alias before executing
+    char *alias_value = alias_get(cmd->args[0]);
+    if (alias_value) {
+        // Create expanded command string with original arguments
+        char expanded[SHELL_MAX_INPUT] = "";
+        strcat(expanded, alias_value);
+        for (int i = 1; cmd->args[i]; i++) {
+            strcat(expanded, " ");
+            strcat(expanded, cmd->args[i]);
+        }
+        
+        // Parse and execute the expanded command
+        command_t *expanded_cmd = parse_input(expanded);
+        if (expanded_cmd) {
+            // Copy over I/O redirection and background settings
+            expanded_cmd->input_file = cmd->input_file ? strdup(cmd->input_file) : NULL;
+            expanded_cmd->output_file = cmd->output_file ? strdup(cmd->output_file) : NULL;
+            expanded_cmd->append_output = cmd->append_output;
+            expanded_cmd->background = cmd->background;
+            
+            // Execute the expanded command
+            execute_command(expanded_cmd);
+            command_free(expanded_cmd);
+            return;
+        }
+    }
+
+    // Try built-in commands second
     if (handle_builtin_command(cmd)) return;
 
     // Handle pipes

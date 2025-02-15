@@ -148,8 +148,8 @@ static void set_signal_handlers() {
     signal(SIGTTOU, SIG_IGN);
 }
 
-// Add new cleanup function
-static void cleanup_background_processes() {
+// Move this from static to global scope if it isn't already
+void cleanup_background_processes(void) {
     // Set exiting flag to prevent further job status messages
     exiting = 1;
     
@@ -291,61 +291,60 @@ void shell_init(void) {
     // Put shell in its own process group and grab control of the terminal
     pid_t shell_pgid = getpid();
     
-    // Make sure we're running interactively
     if (isatty(STDIN_FILENO)) {
-        // Loop until we're in the foreground
         while (tcgetpgrp(STDIN_FILENO) != (shell_pgid = getpgrp()))
             kill(-shell_pgid, SIGTTIN);
 
-        // Ignore interactive and job-control signals
         signal(SIGINT, SIG_IGN);
         signal(SIGQUIT, SIG_IGN);
         signal(SIGTSTP, SIG_IGN);
         signal(SIGTTIN, SIG_IGN);
         signal(SIGTTOU, SIG_IGN);
 
-        // Put ourselves in our own process group
         shell_pgid = getpid();
         if (setpgid(shell_pgid, shell_pgid) < 0) {
             perror("Couldn't put the shell in its own process group");
             exit(1);
         }
 
-        // Grab control of the terminal
         tcsetpgrp(STDIN_FILENO, shell_pgid);
-        
-        // Set up all signal handlers
         set_signal_handlers();
     }
 
-    struct sigaction sa;
-    sigemptyset(&sa.sa_mask);
-    sa.sa_flags = SA_RESTART | SA_NOCLDSTOP;  // Don't create zombies for stopped children
-    sa.sa_handler = sigchld_handler;
-    sigaction(SIGCHLD, &sa, NULL);
+    // Initialize all subsystems
+    history_init();
+    alias_init();
+    command_registry_init();
+    register_builtin_commands();
 
-    // Set shell name before loading RC file
+    // Set environment variables
     setenv("SHELL_NAME", "jshell", 1);
     
-    history_init();
-    history_load();  // Load history at startup
-    alias_init();
-    load_rc_file();
-
-    // Ensure PATH includes system directories
+    // Set up PATH if not already set
     char *current_path = getenv("PATH");
-    if (current_path) {
-        char new_path[4096];
-        snprintf(new_path, sizeof(new_path), 
-                "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:%s", 
-                current_path);
-        setenv("PATH", new_path, 1);
-    } else {
+    if (!current_path) {
         setenv("PATH", "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin", 1);
     }
+    
+    // Load configuration files
+    load_rc_file();
+    history_load();
 
-    // Add this before the first prompt
     printf("Welcome to JShell! Type 'help' for available commands.\n");
+}
+
+void shell_cleanup(void) {
+    // Clean up all subsystems
+    history_save();
+    history_cleanup();
+    alias_cleanup();
+    command_registry_cleanup();
+    cleanup_background_processes();
+    
+    // Reset terminal control
+    tcsetpgrp(STDIN_FILENO, getpgrp());
+    
+    printf("\nGoodbye!\n");
 }
 
 // Update shell_loop to handle exit properly
@@ -384,10 +383,4 @@ void shell_loop(void) {
         free(input);
         command_free(cmd);
     }
-}
-
-void shell_cleanup(void) {
-    alias_cleanup();
-    cleanup_background_processes();
-    history_cleanup();
 }

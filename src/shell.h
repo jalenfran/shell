@@ -5,22 +5,12 @@
 #include "rc.h"
 #include "history.h"
 #include "alias.h"
+#include "command.h"
+#include "command_registry.h"
 #include <sys/types.h>
 
 // Current command being executed
 extern char current_command[MAX_CMD_LEN];
-
-// Command structure to store parsed command information
-typedef struct command_t {
-    char *command;           // The main command
-    char **args;            // Array of command arguments
-    int arg_count;          // Number of arguments
-    char *input_file;       // Input redirection file
-    char *output_file;      // Output redirection file
-    int append_output;      // Flag for append mode (>>)
-    int background;         // Flag for background execution
-    struct command_t *next; // Next command in pipeline
-} command_t;
 
 /**
  * Reads a line of input from the user.
@@ -183,6 +173,16 @@ int is_script_file(const char *filename);
  * @post Last max_entries commands are displayed
  */
 void history_show(int max_entries);
+
+/**
+ * Cleans up all background processes.
+ * @pre None
+ * @post All background processes are terminated
+ */
+void cleanup_background_processes(void);
+
+// Register all built-in shell commands
+void register_builtin_commands(void);
 
 extern int num_background_processes;
 extern pid_t background_processes[];
