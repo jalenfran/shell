@@ -2,7 +2,6 @@
 #define COMMAND_REGISTRY_H
 
 #include "shell.h"
-#include "command.h"
 
 // Command function type definition
 typedef int (*command_func_t)(command_t *cmd);

@@ -10,6 +10,7 @@
 
 // Current command being executed
 extern char current_command[MAX_CMD_LEN];
+
 /**
  * Reads a line of input from the user.
  * @return Allocated string containing input, NULL on EOF/error
@@ -26,6 +27,9 @@ char *read_input(void);
  * @post Returns malloc'd command structure that caller must free
  */
 command_t *parse_input(char *input);
+
+
+
 
 /**
  * Executes a single command.
@@ -171,6 +175,16 @@ int is_script_file(const char *filename);
  * @post Last max_entries commands are displayed
  */
 void history_show(int max_entries);
+
+/**
+ * Cleans up all background processes.
+ * @pre None
+ * @post All background processes are terminated
+ */
+void cleanup_background_processes(void);
+
+// Register all built-in shell commands
+void register_builtin_commands(void);
 
 extern int num_background_processes;
 extern pid_t background_processes[];

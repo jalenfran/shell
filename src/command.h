@@ -13,4 +13,5 @@ typedef struct command_t {
     struct command_t *next; // Next command in pipeline
 } command_t;
 
+
 #endif // COMMAND_H
