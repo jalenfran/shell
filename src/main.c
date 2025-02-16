@@ -1,12 +1,14 @@
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 #include <unistd.h>
+#include <string.h>
 #include <sys/wait.h>
 #include <signal.h>
 #include <termios.h>
 #include "shell.h"
 #include "history.h"
+#include "builtin_commands.h"
+#include "command_registry.h"
 
 // Add signal handler declarations at the top before any functions
 static void sigchld_handler(int);
@@ -330,6 +332,9 @@ void shell_init(void) {
     history_init();
     history_load();  // Load history at startup
     alias_init();
+    // Initialize command registry and register built-in commands
+    init_command_registry();
+    register_builtin_commands();
     load_rc_file();
 
     // Ensure PATH includes system directories
