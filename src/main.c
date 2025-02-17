@@ -350,8 +350,7 @@ void shell_cleanup(void) {
     history_save();
     history_cleanup();
     alias_cleanup();
-    command_registry_cleanup();
-    job_observer_cleanup();  // Add this line
+    cleanup_command_registry();
     cleanup_background_processes();
     
     // Reset terminal control

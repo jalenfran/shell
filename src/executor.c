@@ -363,9 +363,6 @@ void execute_command(command_t *cmd) {
         strncpy(current_command, cmd->args[0], MAX_CMD_LEN - 1);
         current_command[MAX_CMD_LEN - 1] = '\0';
         
-        // Notify observers of job start
-        job_observer_notify_started(pid, current_command);
-        
         if (!cmd->background) {
             set_foreground_pid(pid);
             
@@ -381,9 +378,6 @@ void execute_command(command_t *cmd) {
                 // Only add to background list if process was stopped
                 add_background_process(pid);
                 printf("\n[%d] Stopped %s\n", get_job_number(pid), current_command);
-                job_observer_notify_stopped(pid, current_command);
-            } else {
-                job_observer_notify_completed(pid, current_command, status);
             }
         } else {
             add_background_process(pid);
@@ -404,19 +398,16 @@ void sigchld_handler(int __attribute__((unused)) sig) {
             if (!is_background_process(pid)) {
                 add_background_process(pid);
                 printf("\r\033[K[%d] Stopped %s\n", get_job_number(pid), current_command);
-                job_observer_notify_stopped(pid, current_command);
             }
         } else if (WIFSIGNALED(status)) {
             printf("\r\033[KTerminated\n");
             if (is_background_process(pid)) {
                 remove_background_process(pid);
-                job_observer_notify_completed(pid, get_process_command(pid), status);
             }
         } else if (WIFEXITED(status)) {
             if (is_background_process(pid)) {
                 printf("\r\033[K[%d] Done %s\n", get_job_number(pid), get_process_command(pid));
                 remove_background_process(pid);
-                job_observer_notify_completed(pid, get_process_command(pid), status);
             }
         }
     }
