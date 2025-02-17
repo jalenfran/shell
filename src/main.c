@@ -5,6 +5,7 @@
 #include <sys/wait.h>
 #include <signal.h>
 #include <termios.h>
+#include <errno.h>
 
 // Project headers
 #include "shell.h"
@@ -37,6 +38,9 @@ static volatile int exiting = 0;
 
 volatile int in_input = 0;  
 pid_t foreground_pid = 0; 
+
+// Add global foreground wait flag:
+volatile int fg_wait = 0;
 
 void print_prompt(void) {
     char cwd[PATH_MAX];
@@ -111,14 +115,14 @@ char *get_process_command(pid_t pid) {
 static void sigchld_handler(int __attribute__((unused)) sig) {
     pid_t pid;
     int status;
+    int bg_finished = 0;  // Flag for background job completion
     char saved_input[SHELL_MAX_INPUT];
     size_t saved_cursor = (size_t)current_cursor_pos;
-    int bg_finished = 0;  // Flag for background job completion
 
     // Save current input state
     strncpy(saved_input, current_input_buffer, SHELL_MAX_INPUT);
 
-    while ((pid = waitpid(-1, &status, WNOHANG | WUNTRACED)) > 0) {
+    while ((pid = waitpid(-1, &status, WNOHANG | WUNTRACED | WCONTINUED)) > 0) {
         job_t *job = job_manager_get_job_by_pid(pid);
         if (job) {
             if (WIFSTOPPED(status)) {
@@ -135,25 +139,26 @@ static void sigchld_handler(int __attribute__((unused)) sig) {
             }
         }
     }
-
-    if (in_input && bg_finished) {
-        print_prompt();
-        printf("%s", saved_input);
-        if (saved_cursor < strlen(saved_input)) {
-            printf("\033[%luD", strlen(saved_input) - saved_cursor);
+    
+    // Only print a prompt if not waiting for a foreground job.
+    if (!fg_wait) {
+        if (in_input && bg_finished) {
+            print_prompt();
+            printf("%s", saved_input);
+            if (saved_cursor < strlen(saved_input)) {
+                printf("\033[%luD", strlen(saved_input) - saved_cursor);
+            }
+            fflush(stdout);
+        } else if (bg_finished && !in_input) {
+            print_prompt();
+            fflush(stdout);
+        } else if (in_input && saved_input[0] != '\0') {
+            printf("%s%s", current_prompt, saved_input);
+            if (saved_cursor < strlen(saved_input)) {
+                printf("\033[%luD", strlen(saved_input) - saved_cursor);
+            }
+            fflush(stdout);
         }
-        fflush(stdout);
-    }
-    else if (bg_finished && !in_input) {
-        print_prompt();
-        fflush(stdout);
-    }
-    else if (in_input && saved_input[0] != '\0') {
-        printf("%s%s", current_prompt, saved_input);
-        if (saved_cursor < strlen(saved_input)) {
-            printf("\033[%luD", strlen(saved_input) - saved_cursor);
-        }
-        fflush(stdout);
     }
 }
 
@@ -303,13 +308,19 @@ void shell_loop(void) {
             continue;
         }
         cmd = parse_input(input);
-        if (cmd && cmd->command) {
-            if (strcmp(cmd->command, "exit") == 0) {
-                cleanup_background_processes();
-                status = 0;
-            } else {
-                strncpy(current_command, cmd->args[0], MAX_CMD_LEN - 1);
+        if (cmd) {
+            // Now, if the command is an if block, execute it regardless of cmd->command.
+            if (cmd->type == CMD_IF) {
                 execute_command(cmd);
+            }
+            else if (cmd->command) {
+                if (strcmp(cmd->command, "exit") == 0) {
+                    cleanup_background_processes();
+                    status = 0;
+                } else {
+                    strncpy(current_command, cmd->args[0], MAX_CMD_LEN - 1);
+                    execute_command(cmd);
+                }
             }
         }
         free(input);
