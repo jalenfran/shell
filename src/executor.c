@@ -8,8 +8,8 @@
 #include <ctype.h>
 #include "shell.h"
 #include "alias.h"
-#include "history.h"
 #include "command_registry.h"
+#include "job_manager.h"
 
 extern int num_background_processes;
 extern pid_t background_processes[];
@@ -131,9 +131,14 @@ void continue_job(pid_t pid, int foreground) {
     if (foreground) {
         tcsetpgrp(STDIN_FILENO, pid);
         int status;
-        waitpid(pid, &status, WUNTRACED);
+        // Wait in a loop until the process terminates or stops again.
+        while (1) {
+            if (waitpid(pid, &status, WUNTRACED) < 0)
+                break;
+            if (WIFEXITED(status) || WIFSIGNALED(status) || WIFSTOPPED(status))
+                break;
+        }
         tcsetpgrp(STDIN_FILENO, getpgrp());
-
         if (WIFSTOPPED(status)) {
             const char *cmd_str = get_process_command(pid);
             printf("\n[%d] Stopped %s\n", get_job_number(pid), cmd_str);
@@ -225,26 +230,18 @@ int is_recursive_alias(const char *cmd, int depth) {
     return is_recursive;
 }
 
-// Add this function implementation
+// Modify list_jobs() to use job_manager:
 void list_jobs(void) {
-    for (int i = 0; i < num_background_processes; i++) {
-        pid_t pid = background_processes[i];
-        // Check if process is still running
-        int status;
-        pid_t result = waitpid(pid, &status, WNOHANG);
-        
-        if (result == 0) {
-            // Process is still running
-            printf("[%d] Running\t%s (pid: %d)\n", 
-                   i + 1, get_process_command(pid), pid);
-        } else if (WIFSTOPPED(status)) {
-            // Process is stopped
-            printf("[%d] Stopped\t%s (pid: %d)\n", 
-                   i + 1, get_process_command(pid), pid);
-        }
-    }
-    if (num_background_processes == 0) {
+    int count = 0;
+    job_t *job_list = job_manager_get_all_jobs(&count);
+    if (count == 0) {
         printf("No active jobs\n");
+        return;
+    }
+    for (int i = 0; i < count; i++) {
+        const char *state_str = (job_list[i].state == JOB_RUNNING) ? "Running" :
+                                (job_list[i].state == JOB_STOPPED) ? "Stopped" : "Done";
+        printf("[%d] %s\t%s (pid: %d)\n", job_list[i].job_id, state_str, job_list[i].command, job_list[i].pid);
     }
 }
 
@@ -297,32 +294,25 @@ int execute_script(const char *filename) {
 void execute_command(command_t *cmd) {
     if (!cmd->args[0]) return;
     
-    // Check for built-in command via registry
+    // Handle built-in commands and alias expansion
     const command_entry_t *entry = lookup_command(cmd->args[0]);
     if (entry) {
         entry->func(cmd);
         return;
     }
-
-    if (check_alias_expansion(cmd)) {
-        return;
-    }
-    
-    // Handle pipes
+    if (check_alias_expansion(cmd)) return;
     if (cmd->next) {
         execute_pipe(cmd, cmd->next);
         return;
     }
     
-    // External command execution:
     pid_t pid = fork();
     if (pid == 0) {
-        // Child process setup
+        // Child process: set up new process group and reset signal handlers
         setpgid(0, 0);
-        // Reset all signal handlers to default
         signal(SIGINT, SIG_DFL);
         signal(SIGQUIT, SIG_DFL);
-        signal(SIGTSTP, SIG_DFL);
+        signal(SIGTSTP, SIG_DFL); // <-- Reset SIGTSTP to default in the child
         signal(SIGTTIN, SIG_DFL);
         signal(SIGTTOU, SIG_DFL);
         signal(SIGCHLD, SIG_DFL);
@@ -356,31 +346,27 @@ void execute_command(command_t *cmd) {
             exit(EXIT_FAILURE);
         }
     } else if (pid > 0) {
-        // Parent process handling
-        setpgid(pid, pid);  // Put child in its own process group
-
-        // Save command name immediately after fork for all processes
+        setpgid(pid, pid); // place child in its own group
         strncpy(current_command, cmd->args[0], MAX_CMD_LEN - 1);
         current_command[MAX_CMD_LEN - 1] = '\0';
         
         if (!cmd->background) {
             set_foreground_pid(pid);
-            
             tcsetpgrp(STDIN_FILENO, pid);
-            
             int status;
             waitpid(pid, &status, WUNTRACED);
-            
             tcsetpgrp(STDIN_FILENO, getpgrp());
-            set_foreground_pid(0);  // Clear foreground pid
-
+            set_foreground_pid(0);
             if (WIFSTOPPED(status)) {
-                // Only add to background list if process was stopped
-                add_background_process(pid);
-                printf("\n[%d] Stopped %s\n", get_job_number(pid), current_command);
+                // Only add on suspend as a foreground (non‐background) job
+                job_manager_add_job(pid, current_command, 0);
+                job_manager_update_state(pid, JOB_STOPPED);
+                printf("\n[%d] Suspended %s\n", get_job_number(pid), current_command);
             }
+            // Do not print or add "Done" message for foreground jobs that exit normally.
         } else {
-            add_background_process(pid);
+            // For background jobs, add immediately with background flag set
+            job_manager_add_job(pid, current_command, 1);
             printf("[%d] %d\n", get_job_number(pid), pid);
         }
     } else {
@@ -388,26 +374,26 @@ void execute_command(command_t *cmd) {
     }
 }
 
-// Update the sigchld_handler to notify observers
+// Update sigchld_handler to print termination messages only for background jobs:
 void sigchld_handler(int __attribute__((unused)) sig) {
     pid_t pid;
     int status;
-    
-    while ((pid = waitpid(-1, &status, WNOHANG | WUNTRACED)) > 0) {
-        if (WIFSTOPPED(status)) {
-            if (!is_background_process(pid)) {
-                add_background_process(pid);
-                printf("\r\033[K[%d] Stopped %s\n", get_job_number(pid), current_command);
-            }
-        } else if (WIFSIGNALED(status)) {
-            printf("\r\033[KTerminated\n");
-            if (is_background_process(pid)) {
-                remove_background_process(pid);
-            }
-        } else if (WIFEXITED(status)) {
-            if (is_background_process(pid)) {
-                printf("\r\033[K[%d] Done %s\n", get_job_number(pid), get_process_command(pid));
-                remove_background_process(pid);
+    while ((pid = waitpid(-1, &status, WNOHANG | WUNTRACED | WCONTINUED)) > 0) {
+        job_t *job = job_manager_get_job_by_pid(pid);
+        if (job) {
+            if (WIFCONTINUED(status)) {
+                job_manager_update_state(pid, JOB_RUNNING);
+            } else if (WIFSTOPPED(status)) {
+                job_manager_update_state(pid, JOB_STOPPED);
+                printf("\r\033[K[%d] Suspended %s\n", job->job_id, job->command);
+            } else if (WIFSIGNALED(status)) {
+                if (job->background)
+                    printf("\r\033[K[%d] Terminated %s\n", job->job_id, job->command);
+                job_manager_remove_job(pid);
+            } else if (WIFEXITED(status)) {
+                if (job->background)
+                    printf("\r\033[K[%d] Done %s\n", job->job_id, job->command);
+                job_manager_remove_job(pid);
             }
         }
     }

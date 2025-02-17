@@ -11,19 +11,19 @@
 #include "history.h"
 #include "builtin_commands.h"
 #include "command_registry.h"
+#include "job_manager.h"
 
 // Add signal handler declarations at the top before any functions
 static void sigchld_handler(int);
 static void sigint_handler(int);
-static void sigtstp_handler(int);
 static void sigterm_handler(int);
+static void sigtstp_handler(int);
 
 // Change these from static to global
 int current_cursor_pos = 0;
 char current_prompt[SHELL_MAX_INPUT];
 
-pid_t background_processes[MAX_BACKGROUND_PROCESSES];
-int num_background_processes = 0;
+// Remove legacy declarations:
 
 // Define the global current_command variable (matches the extern declaration)
 char current_command[MAX_CMD_LEN];
@@ -32,99 +32,29 @@ char current_command[MAX_CMD_LEN];
 char current_input_buffer[SHELL_MAX_INPUT];
 int current_input_length = 0;
 
-// Add this global variable
-// static int current_cursor_pos = 0;
-
 // Add a global flag for exit state
 static volatile int exiting = 0;
 
-// Add a global flag to indicate waiting for input
-static volatile int in_input = 0;
-
-// Add global variable to track foreground process
-static pid_t foreground_pid = 0;
-
-struct bg_process {
-    pid_t pid;
-    char command[MAX_CMD_LEN];
-};
-
-static struct bg_process bg_processes[MAX_BACKGROUND_PROCESSES];
-
-void add_background_process(pid_t pid) {
-    if (num_background_processes < MAX_BACKGROUND_PROCESSES) {
-        bg_processes[num_background_processes].pid = pid;
-        strncpy(bg_processes[num_background_processes].command, 
-                current_command, 
-                MAX_CMD_LEN - 1);
-        background_processes[num_background_processes++] = pid;
-    }
-}
-
-char *get_process_command(pid_t pid) {
-    for (int i = 0; i < num_background_processes; i++) {
-        if (bg_processes[i].pid == pid) {
-            return bg_processes[i].command;
-        }
-    }
-    return "unknown";
-}
-
-int is_background_process(pid_t pid) {
-    for (int i = 0; i < num_background_processes; i++) {
-        if (background_processes[i] == pid) {
-            return 1;
-        }
-    }
-    return 0;
-}
-
-void remove_background_process(pid_t pid) {
-    for (int i = 0; i < num_background_processes; i++) {
-        if (background_processes[i] == pid) {
-            for (int j = i; j < num_background_processes - 1; j++) {
-                background_processes[j] = background_processes[j + 1];
-                bg_processes[j] = bg_processes[j + 1];
-            }
-            num_background_processes--;
-            break;
-        }
-    }
-}
-
-int get_job_number(pid_t pid) {
-    for (int i = 0; i < num_background_processes; i++) {
-        if (background_processes[i] == pid) {
-            return i + 1;  // Return 1-based job number
-        }
-    }
-    return 1;  // Default to 1 if not found
-}
-
-int get_pid_by_job_id(int job_id) {
-    job_id--; // Convert from 1-based to 0-based index
-    if (job_id >= 0 && job_id < num_background_processes) {
-        return background_processes[job_id];
-    }
-    return -1;
-}
+volatile int in_input = 0;  
+pid_t foreground_pid = 0; 
 
 void print_prompt(void) {
     char cwd[PATH_MAX];
-    char current_prompt[MAX_PROMPT_LEN];
+    char prompt_buf[MAX_PROMPT_LEN];
     
     if (getcwd(cwd, sizeof(cwd)) == NULL) {
         strcpy(cwd, "???");
     }
     
-    size_t prompt_result = snprintf(current_prompt, sizeof(current_prompt), "%s %s", cwd, SHELL_PROMPT);
-    if (prompt_result >= sizeof(current_prompt)) {
-        // Prompt too long, use fallback
+    size_t prompt_result = snprintf(prompt_buf, sizeof(prompt_buf), "%s %s", cwd, SHELL_PROMPT);
+    if (prompt_result >= sizeof(prompt_buf)) {
+        strcpy(current_prompt, SHELL_PROMPT);
         printf("%s ", SHELL_PROMPT);
         return;
     }
     
-    printf("%s ", current_prompt);
+    strcpy(current_prompt, prompt_buf);
+    printf("%s ", prompt_buf);
 }
 
 static void set_signal_handlers() {
@@ -132,135 +62,140 @@ static void set_signal_handlers() {
     sigemptyset(&sa.sa_mask);
     
     // Disable SA_RESTART for SIGCHLD so that blocking input is interrupted
-    sa.sa_flags = 0;
+    sa.sa_flags = SA_RESTART | SA_NOCLDSTOP;  // Don't create zombies for stopped children
     sa.sa_handler = sigchld_handler;
     sigaction(SIGCHLD, &sa, NULL);
     
-    // For SIGINT, keep SA_RESTART (or disable it if you want similar behavior)
-    sa.sa_flags = 0;  // Optionally disable SA_RESTART here, too.
     sa.sa_handler = sigint_handler;
     sigaction(SIGINT, &sa, NULL);
-    
-    // For SIGTSTP, keep SA_RESTART disabled as before
-    sa.sa_flags = 0;
+
     sa.sa_handler = sigtstp_handler;
     sigaction(SIGTSTP, &sa, NULL);
-    
-    // Ignore other signals as before
-    signal(SIGQUIT, SIG_IGN);
-    signal(SIGTTIN, SIG_IGN);
-    signal(SIGTTOU, SIG_IGN);
+
+    signal(SIGQUIT, SIG_IGN);  // Ignore quit signal
+    signal(SIGTTIN, SIG_IGN);  // Ignore background read
+    signal(SIGTTOU, SIG_IGN);  // Ignore background write
 }
 
-// Move this from static to global scope if it isn't already
 void cleanup_background_processes(void) {
-    // Set exiting flag to prevent further job status messages
     exiting = 1;
-    
-    // Terminate all background processes
-    for (int i = 0; i < num_background_processes; i++) {
-        pid_t pid = background_processes[i];
+    int count = 0;
+    job_t *job_list = job_manager_get_all_jobs(&count);
+    for (int i = 0; i < count; i++) {
+        pid_t pid = job_list[i].pid;
         kill(-pid, SIGTERM);
         waitpid(pid, NULL, 0);
     }
-    num_background_processes = 0;
+}
+
+int get_job_number(pid_t pid) {
+    job_t *job = job_manager_get_job_by_pid(pid);
+    return job ? job->job_id : -1;
+}
+
+int get_pid_by_job_id(int job_id) {
+    int count = 0;
+    job_t *job_list = job_manager_get_all_jobs(&count);
+    for (int i = 0; i < count; i++) {
+        if (job_list[i].job_id == job_id)
+            return job_list[i].pid;
+    }
+    return -1;
+}
+
+char *get_process_command(pid_t pid) {
+    job_t *job = job_manager_get_job_by_pid(pid);
+    return job ? job->command : "unknown";
 }
 
 static void sigchld_handler(int __attribute__((unused)) sig) {
     pid_t pid;
     int status;
     char saved_input[SHELL_MAX_INPUT];
-    size_t saved_cursor = (size_t)current_cursor_pos;  // Convert to size_t for comparison
-    
+    size_t saved_cursor = (size_t)current_cursor_pos;
+    int bg_finished = 0;  // Flag for background job completion
+
     // Save current input state
     strncpy(saved_input, current_input_buffer, SHELL_MAX_INPUT);
-    
-    // Use WNOHANG to prevent blocking
+
     while ((pid = waitpid(-1, &status, WNOHANG | WUNTRACED)) > 0) {
-        if (WIFSTOPPED(status)) {
-            if (!is_background_process(pid)) {
-                add_background_process(pid);
-                printf("\r\033[K[%d] Stopped %s\n", get_job_number(pid), current_command);
-            }
-        } else if (WIFSIGNALED(status)) {
-            printf("\r\033[KTerminated\n");
-            if (is_background_process(pid)) {
-                remove_background_process(pid);
-            }
-        } else if (WIFEXITED(status)) {
-            if (is_background_process(pid)) {
-                printf("\r\033[K[%d] Done %s\n", get_job_number(pid), get_process_command(pid));
-                remove_background_process(pid);
+        job_t *job = job_manager_get_job_by_pid(pid);
+        if (job) {
+            if (WIFSTOPPED(status)) {
+                job_manager_update_state(pid, JOB_STOPPED);
+                printf("\r\033[K[%d] Suspended %s\n", job->job_id, job->command);
+            } else if (WIFSIGNALED(status)) {
+                bg_finished = bg_finished || job->background;
+                printf("\r\033[K[%d] Terminated %s\n", job->job_id, job->command);
+                job_manager_remove_job(pid);
+            } else if (WIFEXITED(status)) {
+                bg_finished = bg_finished || job->background;
+                printf("\r\033[K[%d] Done %s\n", job->job_id, job->command);
+                job_manager_remove_job(pid);
             }
         }
     }
 
-    // Only restore prompt and input if we were in input mode
-    if (in_input && saved_input[0] != '\0') {
-        printf("%s%s", current_prompt, saved_input);
-        
-        // Restore cursor position
+    if (in_input && bg_finished) {
+        print_prompt();
+        printf("%s", saved_input);
         if (saved_cursor < strlen(saved_input)) {
             printf("\033[%luD", strlen(saved_input) - saved_cursor);
         }
-        
-        // Make sure the input buffer maintains its state
-        strncpy(current_input_buffer, saved_input, SHELL_MAX_INPUT);
-        current_input_length = strlen(saved_input);
-        current_cursor_pos = saved_cursor;
-        
         fflush(stdout);
-    } else if (in_input) {
+    }
+    else if (bg_finished && !in_input) {
         print_prompt();
+        fflush(stdout);
+    }
+    else if (in_input && saved_input[0] != '\0') {
+        printf("%s%s", current_prompt, saved_input);
+        if (saved_cursor < strlen(saved_input)) {
+            printf("\033[%luD", strlen(saved_input) - saved_cursor);
+        }
         fflush(stdout);
     }
 }
 
+
 static void sigint_handler(int __attribute__((unused)) sig) {
     if (foreground_pid > 0) {
-        // Add to background list temporarily to track the command
-        add_background_process(foreground_pid);
-        
-        // Send interrupt signal
         kill(-foreground_pid, SIGINT);
-        
-        // Print message
         printf("\r\033[KTerminated\n");
-        
-        // Remove from background list and clear foreground pid
-        remove_background_process(foreground_pid);
         foreground_pid = 0;
-    } else if (current_input_length > 0) {
-        printf("\r\033[K^C\n");
     } else {
         printf("\r\033[K^C\n");
     }
-
-    // Clear input state
     current_input_length = 0;
     current_cursor_pos = 0;
     current_input_buffer[0] = '\0';
-    
     if (!foreground_pid) {
         print_prompt();
     }
     fflush(stdout);
 }
 
+static void sigtstp_handler(int __attribute__((unused)) sig) {
+    if (foreground_pid > 0) {
+        kill(-foreground_pid, SIGTSTP);
+        printf("\r\033[K[%d] Suspended\n", foreground_pid);
+        foreground_pid = 0;
+    } else {
+        printf("\r\033[K^Z\n");
+    }
+
+    // Clear input state
+    current_input_length = 0;
+    current_cursor_pos = 0;
+    current_input_buffer[0] = '\0';
+
+    print_prompt();
+    fflush(stdout);
+}
+
 // Add this function to set foreground pid
 void set_foreground_pid(pid_t pid) {
     foreground_pid = pid;
-}
-
-static void sigtstp_handler(int __attribute__((unused)) sig) {
-    if (foreground_pid > 0) {
-        // If there's a foreground process, stop it
-        kill(-foreground_pid, SIGTSTP);
-        printf("\n[%d] Stopped %s\n", get_job_number(foreground_pid), current_command);
-    } else {
-        printf("\n");
-    }
-    fflush(stdout);
 }
 
 // Add signal handler for SIGTERM
@@ -292,56 +227,41 @@ int main(int argc, char *argv[]) {
 
 // Update shell initialization to properly handle terminal control
 void shell_init(void) {
-    // Put shell in its own process group and grab control of the terminal
+    // Put shell in its own process group and grab terminal control
     pid_t shell_pgid = getpid();
-    
     if (isatty(STDIN_FILENO)) {
         while (tcgetpgrp(STDIN_FILENO) != (shell_pgid = getpgrp()))
             kill(-shell_pgid, SIGTTIN);
-
         signal(SIGINT, SIG_IGN);
         signal(SIGQUIT, SIG_IGN);
-        signal(SIGTSTP, SIG_IGN);
+        signal(SIGTSTP, sigtstp_handler);
         signal(SIGTTIN, SIG_IGN);
         signal(SIGTTOU, SIG_IGN);
-
         shell_pgid = getpid();
         if (setpgid(shell_pgid, shell_pgid) < 0) {
             perror("Couldn't put the shell in its own process group");
             exit(1);
         }
-
         tcsetpgrp(STDIN_FILENO, shell_pgid);
         set_signal_handlers();
     }
-
-    struct sigaction sa;
-    sigemptyset(&sa.sa_mask);
-    sa.sa_flags = SA_RESTART | SA_NOCLDSTOP;  // Don't create zombies for stopped children
-    sa.sa_handler = sigchld_handler;
-    sigaction(SIGCHLD, &sa, NULL);
-
-    // Set shell name before loading RC file
+    {
+        struct sigaction sa;
+        sigemptyset(&sa.sa_mask);
+        sa.sa_flags = SA_RESTART | SA_NOCLDSTOP;
+        sa.sa_handler = sigchld_handler;
+        sigaction(SIGCHLD, &sa, NULL);
+    }
     setenv("SHELL_NAME", "jshell", 1);
-    
     history_init();
-    history_load();  // Load history at startup
+    history_load();
     alias_init();
-    // Initialize command registry and register built-in commands
     init_command_registry();
     register_builtin_commands();
     load_rc_file();
-
-    // Ensure PATH includes system directories
-    char *current_path = getenv("PATH");
-    if (!current_path) {
+    if (!getenv("PATH")) {
         setenv("PATH", "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin", 1);
     }
-    
-    // Load configuration files
-    load_rc_file();
-    history_load();
-
     printf("Welcome to JShell! Type 'help' for available commands.\n");
 }
 

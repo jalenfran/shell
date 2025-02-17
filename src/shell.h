@@ -5,7 +5,7 @@
 #include "rc.h"
 #include "history.h"
 #include "alias.h"
-#include "command.h"  // Include command_t from here
+#include "command.h"
 #include <sys/types.h>
 
 // Current command being executed
@@ -28,9 +28,6 @@ char *read_input(void);
  */
 command_t *parse_input(char *input);
 
-
-
-
 /**
  * Executes a single command.
  * @param cmd The command structure to execute
@@ -49,44 +46,12 @@ void execute_command(command_t *cmd);
 void execute_pipe(command_t *left, command_t *right);
 
 /**
- * Adds a process to background process list.
- * @param pid Process ID to add
- * @pre Valid process ID
- * @post Process is added to background list if space available
- */
-void add_background_process(pid_t pid);
-
-/**
- * Removes a process from background process list.
- * @param pid Process ID to remove
- * @pre Valid process ID
- * @post Process is removed from background list if present
- */
-void remove_background_process(pid_t pid);
-
-/**
- * Checks if a process is running in background.
- * @param pid Process ID to check
- * @return 1 if process is in background, 0 otherwise
- * @pre Valid process ID
- */
-int is_background_process(pid_t pid);
-
-/**
  * Sets the current foreground process.
  * @param pid Process ID to set as foreground
  * @pre Valid process ID
  * @post Process is set as current foreground process
  */
 void set_foreground_pid(pid_t pid);
-
-/**
- * Gets the command string associated with a process.
- * @param pid Process ID to query
- * @return Command string or NULL if not found
- * @pre Valid process ID
- */
-char *get_process_command(pid_t pid);
 
 /**
  * Gets job number for a process ID.
@@ -103,6 +68,14 @@ int get_job_number(pid_t pid);
  * @pre Valid job ID
  */
 int get_pid_by_job_id(int job_id);
+
+/**
+ * Gets the command string associated with a process.
+ * @param pid Process ID to query
+ * @return Command string or NULL if not found
+ * @pre Valid process ID
+ */
+char *get_process_command(pid_t pid);
 
 /**
  * Continues a stopped job.
@@ -185,8 +158,5 @@ void cleanup_background_processes(void);
 
 // Register all built-in shell commands
 void register_builtin_commands(void);
-
-extern int num_background_processes;
-extern pid_t background_processes[];
 
 #endif

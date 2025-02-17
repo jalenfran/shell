@@ -7,6 +7,7 @@
 #include <unistd.h>
 #include <string.h>
 #include <ctype.h>
+#include "job_manager.h"
 
 // External helper functions used in executor.c
 extern void list_jobs(void);
@@ -183,7 +184,8 @@ int cmd_bg(command_t *cmd) {
         int job_id = atoi(cmd->args[1] + 1);
         pid_t pid = get_pid_by_job_id(job_id);
         if (pid > 0) {
-            continue_job(pid, 0); // background
+            continue_job(pid, 0);          // Send SIGCONT in background
+            job_manager_update_state(pid, JOB_RUNNING);  // Update state to running
             printf("[%d] %s &\n", job_id, get_process_command(pid));
         } else {
             fprintf(stderr, "bg: no such job\n");
