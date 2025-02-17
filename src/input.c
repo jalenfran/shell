@@ -77,8 +77,12 @@ char **get_path_completions(const char *path, int *count) {
         
         if (strncmp(entry->d_name, search_prefix, prefix_len) == 0) {
             char check_path[PATH_MAX];
-            snprintf(check_path, PATH_MAX, "%s/%s", 
+            size_t check_result = snprintf(check_path, sizeof(check_path), "%s/%s",
                     (*dir_path ? dir_path : "."), entry->d_name);
+            if (check_result >= sizeof(check_path)) {
+                // Path too long, skip this entry
+                continue;
+            }
             
             struct stat st;
             if (stat(check_path, &st) == 0) {

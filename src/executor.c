@@ -8,65 +8,11 @@
 #include <ctype.h>
 #include "shell.h"
 #include "alias.h"
-#include "history.h"
+#include "command_registry.h"
+#include "job_manager.h"
 
 extern int num_background_processes;
 extern pid_t background_processes[];
-
-// Help text for the shell
-static const char *HELP_TEXT = 
-    "\n\033[1;36m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m\n"
-    "\033[1;32mJShell v1.0\033[0m - A Modern Unix Shell Implementation\n"
-    "Author: Jalen Francis\n"
-    "\n\033[1;33mCore Features:\033[0m\n"
-    "  • Command execution with argument handling\n"
-    "  • Input/Output redirection using >, >>, and <\n"
-    "  • Pipeline support using | operator\n"
-    "  • Background process execution using &\n"
-    "  • Environment variable management\n"
-    "  • Command history navigation\n"
-    "  • Tab completion for files and commands\n"
-    "  • Alias management with validation\n"
-    "  • Job control and process management\n"
-    "\n\033[1;33mBuilt-in Commands:\033[0m\n"
-    "  \033[1mhelp\033[0m              Display this help message\n"
-    "  \033[1mcd\033[0m [dir]          Change current directory\n"
-    "  \033[1mexit\033[0m              Exit the shell\n"
-    "  \033[1menv\033[0m               Display all environment variables\n"
-    "  \033[1mexport\033[0m VAR=value  Set environment variable\n"
-    "  \033[1munset\033[0m VAR         Remove environment variable\n"
-    "  \033[1malias\033[0m [name='cmd'] Create/list command aliases\n"
-    "  \033[1munalias\033[0m name      Remove an alias\n"
-    "  \033[1mjobs\033[0m              List all background jobs\n"
-    "  \033[1mhistory\033[0m           Show entire command history\n"
-    "  \033[1mhistory\033[0m [n]       Show command history (last n entries)\n"
-    "\n\033[1;33mJob Control:\033[0m\n"
-    "  \033[1mfg\033[0m [%job]         Bring job to foreground\n"
-    "  \033[1mbg\033[0m [%job]         Continue job in background\n"
-    "  \033[1mkill\033[0m %job         Terminate specified job\n"
-    "  \033[1mjobs\033[0m              List all background jobs\n"
-    "\n\033[1;33mKey Bindings:\033[0m\n"
-    "  \033[1m↑/↓\033[0m               Browse command history\n"
-    "  \033[1m←/→\033[0m               Navigate cursor position\n"
-    "  \033[1mTab\033[0m               Auto-complete commands and files\n"
-    "  \033[1mCtrl+C\033[0m            Interrupt current process\n"
-    "  \033[1mCtrl+Z\033[0m            Suspend current process\n"
-    "\n\033[1;33mAlias Examples:\033[0m\n"
-    "  alias ll='ls -l'    Create alias for long listing\n"
-    "  alias              Show all defined aliases\n"
-    "  unalias ll         Remove the ll alias\n"
-    "\n\033[1;33mRedirection Examples:\033[0m\n"
-    "  command > file     Write output to file\n"
-    "  command >> file    Append output to file\n"
-    "  command < file     Read input from file\n"
-    "  cmd1 | cmd2        Pipe output of cmd1 to cmd2\n"
-    "\n\033[1;33mBackground Job Examples:\033[0m\n"
-    "  command &          Run in background\n"
-    "  jobs              List all background jobs\n"
-    "  fg %1             Resume job 1 in foreground\n"
-    "  bg %1             Resume job 1 in background\n"
-    "  kill %1           Terminate job 1\n"
-    "\033[1;36m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m\n";
 
 /**
  * Executes a pipeline of two commands
@@ -185,9 +131,14 @@ void continue_job(pid_t pid, int foreground) {
     if (foreground) {
         tcsetpgrp(STDIN_FILENO, pid);
         int status;
-        waitpid(pid, &status, WUNTRACED);
+        // Wait in a loop until the process terminates or stops again.
+        while (1) {
+            if (waitpid(pid, &status, WUNTRACED) < 0)
+                break;
+            if (WIFEXITED(status) || WIFSIGNALED(status) || WIFSTOPPED(status))
+                break;
+        }
         tcsetpgrp(STDIN_FILENO, getpgrp());
-
         if (WIFSTOPPED(status)) {
             const char *cmd_str = get_process_command(pid);
             printf("\n[%d] Stopped %s\n", get_job_number(pid), cmd_str);
@@ -207,87 +158,10 @@ void kill_job(int job_id) {
 }
 
 /**
- * Handles execution of built-in commands
+ * Handles checking for alias expansion
  * Returns 1 if command was handled, 0 otherwise
  */
-static int handle_builtin_command(command_t *cmd) {
-    // Add history command handling at the start
-    if (strcmp(cmd->args[0], "history") == 0) {
-        int max_entries = history_size();  // Default to showing all entries
-        
-        if (cmd->args[1]) {
-            char *endptr;
-            long num = strtol(cmd->args[1], &endptr, 10);
-            if (*endptr == '\0' && num > 0) {
-                max_entries = (int)num;
-            } else {
-                fprintf(stderr, "history: numeric argument required\n");
-                return 1;
-            }
-        }
-        
-        history_show(max_entries);
-        return 1;
-    }
-
-    // Add alias handling back first
-    if (strcmp(cmd->args[0], "alias") == 0) {
-        if (cmd->args[1] == NULL) {
-            alias_list();
-        } else {
-            char *equals = strchr(cmd->args[1], '=');
-            if (equals) {
-                *equals = '\0';
-                char *name = cmd->args[1];
-                char *value = equals + 1;
-                
-                // Validate alias name
-                if (!is_valid_alias_name(name)) {
-                    fprintf(stderr, "alias: invalid alias name: %s\n", name);
-                    return 1;
-                }
-                
-                // Improve quote handling
-                if (*value == '\'' || *value == '"') {
-                    value++;  // Skip opening quote
-                    size_t len = strlen(value);
-                    if (len > 0 && (value[len-1] == '\'' || value[len-1] == '"')) {
-                        value[len-1] = '\0';  // Remove closing quote
-                    }
-                }
-                
-                // Strip extra whitespace and validate value
-                while (*value && isspace(*value)) value++;
-                char *end = value + strlen(value) - 1;
-                while (end > value && isspace(*end)) *end-- = '\0';
-                
-                // Check for empty value
-                if (!*value) {
-                    fprintf(stderr, "alias: empty alias value not allowed\n");
-                    return 1;
-                }
-                
-                alias_add(name, value);
-            } else {
-                char *alias_value = alias_get(cmd->args[1]);
-                if (alias_value) {
-                    printf("alias %s='%s'\n", cmd->args[1], alias_value);
-                } else {
-                    fprintf(stderr, "alias: %s not found\n", cmd->args[1]);
-                }
-            }
-        }
-        return 1;
-    }
-
-    if (strcmp(cmd->args[0], "unalias") == 0) {
-        if (cmd->args[1]) {
-            alias_remove(cmd->args[1]);
-        } else {
-            fprintf(stderr, "unalias: missing argument\n");
-        }
-        return 1;
-    }
+static int check_alias_expansion(command_t *cmd) {
 
     // Check for alias expansion
     if (cmd->args[0]) {
@@ -329,103 +203,6 @@ static int handle_builtin_command(command_t *cmd) {
         }
     }
 
-    if (strcmp(cmd->args[0], "help") == 0) {
-        printf("%s", HELP_TEXT);
-        return 1;
-    }
-
-    // Add export command handling
-    if (strcmp(cmd->args[0], "export") == 0) {
-        if (cmd->args[1] == NULL) {
-            fprintf(stderr, "export: missing variable assignment\n");
-        } else {
-            char *equals = strchr(cmd->args[1], '=');
-            if (equals) {
-                *equals = '\0';  // Split string at '='
-                if (setenv(cmd->args[1], equals + 1, 1) != 0) {
-                    perror("export failed");
-                }
-            } else {
-                fprintf(stderr, "export: invalid format (use VAR=value)\n");
-            }
-        }
-        return 1;
-    }
-
-    // Add unset command handling
-    if (strcmp(cmd->args[0], "unset") == 0) {
-        if (cmd->args[1] == NULL) {
-            fprintf(stderr, "unset: missing variable name\n");
-        } else {
-            if (unsetenv(cmd->args[1]) != 0) {
-                perror("unset failed");
-            }
-        }
-        return 1;
-    }
-
-    // Add env command handling
-    if (strcmp(cmd->args[0], "env") == 0) {
-        extern char **environ;
-        for (char **env = environ; *env; env++) {
-            printf("%s\n", *env);
-        }
-        return 1;
-    }
-
-    if (strcmp(cmd->args[0], "cd") == 0) {
-        if (cmd->args[1] == NULL) {
-            fprintf(stderr, "cd: expected argument\n");
-        } else {
-            if (chdir(cmd->args[1]) != 0) {
-                perror("cd: could not open directory");
-            }
-        }
-        return 1;
-    }
-
-    // fg command
-    if (strcmp(cmd->args[0], "fg") == 0) {
-        int job_id = cmd->args[1] ? atoi(cmd->args[1] + 1) : 1;  // +1 to skip '%'
-        pid_t pid = get_pid_by_job_id(job_id);
-        if (pid > 0) {
-            continue_job(pid, 1);  // 1 means foreground
-        } else {
-            fprintf(stderr, "fg: no such job\n");
-        }
-        return 1;
-    }
-
-    // bg command
-    if (strcmp(cmd->args[0], "bg") == 0) {
-        int job_id = cmd->args[1] ? atoi(cmd->args[1] + 1) : 1;
-        pid_t pid = get_pid_by_job_id(job_id);
-        if (pid > 0) {
-            continue_job(pid, 0);  // 0 means background
-            printf("[%d] %s &\n", job_id, get_process_command(pid));
-        } else {
-            fprintf(stderr, "bg: no such job\n");
-        }
-        return 1;
-    }
-
-    // kill command
-    if (strcmp(cmd->args[0], "kill") == 0) {
-        if (!cmd->args[1]) {
-            fprintf(stderr, "kill: usage: kill %%job_id\n");
-            return 1;
-        }
-        int job_id = atoi(cmd->args[1] + 1);  // +1 to skip '%'
-        kill_job(job_id);
-        return 1;
-    }
-
-    // Add this before the return 0
-    if (strcmp(cmd->args[0], "jobs") == 0) {
-        list_jobs();
-        return 1;
-    }
-
     return 0;
 }
 
@@ -453,26 +230,18 @@ int is_recursive_alias(const char *cmd, int depth) {
     return is_recursive;
 }
 
-// Add this function implementation
+// Modify list_jobs() to use job_manager:
 void list_jobs(void) {
-    for (int i = 0; i < num_background_processes; i++) {
-        pid_t pid = background_processes[i];
-        // Check if process is still running
-        int status;
-        pid_t result = waitpid(pid, &status, WNOHANG);
-        
-        if (result == 0) {
-            // Process is still running
-            printf("[%d] Running\t%s (pid: %d)\n", 
-                   i + 1, get_process_command(pid), pid);
-        } else if (WIFSTOPPED(status)) {
-            // Process is stopped
-            printf("[%d] Stopped\t%s (pid: %d)\n", 
-                   i + 1, get_process_command(pid), pid);
-        }
-    }
-    if (num_background_processes == 0) {
+    int count = 0;
+    job_t *job_list = job_manager_get_all_jobs(&count);
+    if (count == 0) {
         printf("No active jobs\n");
+        return;
+    }
+    for (int i = 0; i < count; i++) {
+        const char *state_str = (job_list[i].state == JOB_RUNNING) ? "Running" :
+                                (job_list[i].state == JOB_STOPPED) ? "Stopped" : "Done";
+        printf("[%d] %s\t%s (pid: %d)\n", job_list[i].job_id, state_str, job_list[i].command, job_list[i].pid);
     }
 }
 
@@ -524,26 +293,26 @@ int execute_script(const char *filename) {
  */
 void execute_command(command_t *cmd) {
     if (!cmd->args[0]) return;
-
-    // Try built-in commands first
-    if (handle_builtin_command(cmd)) return;
-
-    // Handle pipes
+    
+    // Handle built-in commands and alias expansion
+    const command_entry_t *entry = lookup_command(cmd->args[0]);
+    if (entry) {
+        entry->func(cmd);
+        return;
+    }
+    if (check_alias_expansion(cmd)) return;
     if (cmd->next) {
         execute_pipe(cmd, cmd->next);
         return;
     }
-
-    // Execute external command
+    
     pid_t pid = fork();
     if (pid == 0) {
-        // Child process setup
-        setpgid(0, 0);  // Create new process group
-        
-        // Reset all signal handlers to default
+        // Child process: set up new process group and reset signal handlers
+        setpgid(0, 0);
         signal(SIGINT, SIG_DFL);
         signal(SIGQUIT, SIG_DFL);
-        signal(SIGTSTP, SIG_DFL);
+        signal(SIGTSTP, SIG_DFL); // <-- Reset SIGTSTP to default in the child
         signal(SIGTTIN, SIG_DFL);
         signal(SIGTTOU, SIG_DFL);
         signal(SIGCHLD, SIG_DFL);
@@ -577,34 +346,55 @@ void execute_command(command_t *cmd) {
             exit(EXIT_FAILURE);
         }
     } else if (pid > 0) {
-        // Parent process handling
-        setpgid(pid, pid);  // Put child in its own process group
-
-        // Save command name immediately after fork for all processes
+        setpgid(pid, pid); // place child in its own group
         strncpy(current_command, cmd->args[0], MAX_CMD_LEN - 1);
         current_command[MAX_CMD_LEN - 1] = '\0';
         
         if (!cmd->background) {
             set_foreground_pid(pid);
-            
             tcsetpgrp(STDIN_FILENO, pid);
-            
             int status;
             waitpid(pid, &status, WUNTRACED);
-            
             tcsetpgrp(STDIN_FILENO, getpgrp());
-            set_foreground_pid(0);  // Clear foreground pid
-
+            set_foreground_pid(0);
             if (WIFSTOPPED(status)) {
-                // Only add to background list if process was stopped
-                add_background_process(pid);
-                printf("\n[%d] Stopped %s\n", get_job_number(pid), current_command);
+                // Only add on suspend as a foreground (non‐background) job
+                job_manager_add_job(pid, current_command, 0);
+                job_manager_update_state(pid, JOB_STOPPED);
+                printf("\n[%d] Suspended %s\n", get_job_number(pid), current_command);
             }
+            // Do not print or add "Done" message for foreground jobs that exit normally.
         } else {
-            add_background_process(pid);
+            // For background jobs, add immediately with background flag set
+            job_manager_add_job(pid, current_command, 1);
             printf("[%d] %d\n", get_job_number(pid), pid);
         }
     } else {
         perror("fork error");
+    }
+}
+
+// Update sigchld_handler to print termination messages only for background jobs:
+void sigchld_handler(int __attribute__((unused)) sig) {
+    pid_t pid;
+    int status;
+    while ((pid = waitpid(-1, &status, WNOHANG | WUNTRACED | WCONTINUED)) > 0) {
+        job_t *job = job_manager_get_job_by_pid(pid);
+        if (job) {
+            if (WIFCONTINUED(status)) {
+                job_manager_update_state(pid, JOB_RUNNING);
+            } else if (WIFSTOPPED(status)) {
+                job_manager_update_state(pid, JOB_STOPPED);
+                printf("\r\033[K[%d] Suspended %s\n", job->job_id, job->command);
+            } else if (WIFSIGNALED(status)) {
+                if (job->background)
+                    printf("\r\033[K[%d] Terminated %s\n", job->job_id, job->command);
+                job_manager_remove_job(pid);
+            } else if (WIFEXITED(status)) {
+                if (job->background)
+                    printf("\r\033[K[%d] Done %s\n", job->job_id, job->command);
+                job_manager_remove_job(pid);
+            }
+        }
     }
 }

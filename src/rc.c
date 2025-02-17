@@ -7,9 +7,6 @@
 #include "rc.h"
 #include "alias.h"
 
-// Add debug flag
-#define RC_DEBUG 0
-
 char *get_rc_path(void) {
     static char rc_path[PATH_MAX];
     char *home = getenv("HOME");
@@ -68,13 +65,11 @@ static void handle_alias(const char *line) {
 
 int source_rc_file(const char *path) {
     if (!path || access(path, R_OK) != 0) {
-        if (RC_DEBUG) printf("Cannot access RC file: %s\n", path);
         return -1;
     }
 
     FILE *rc = fopen(path, "r");
     if (!rc) {
-        if (RC_DEBUG) perror("Failed to open RC file");
         return -1;
     }
 
