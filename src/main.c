@@ -41,6 +41,8 @@ pid_t foreground_pid = 0;
 
 // Add global foreground wait flag:
 volatile int fg_wait = 0;
+volatile int print_prompt_pending = 0;
+volatile int fg_process_done = 0;
 
 void print_prompt(void) {
     char cwd[PATH_MAX];
@@ -58,7 +60,7 @@ void print_prompt(void) {
     }
     
     strcpy(current_prompt, prompt_buf);
-    printf("%s ", prompt_buf);
+    printf("%s", prompt_buf);
 }
 
 static void set_signal_handlers() {
@@ -115,7 +117,6 @@ char *get_process_command(pid_t pid) {
 static void sigchld_handler(int __attribute__((unused)) sig) {
     pid_t pid;
     int status;
-    int bg_finished = 0;  // Flag for background job completion
     char saved_input[SHELL_MAX_INPUT];
     size_t saved_cursor = (size_t)current_cursor_pos;
 
@@ -128,40 +129,34 @@ static void sigchld_handler(int __attribute__((unused)) sig) {
             if (WIFSTOPPED(status)) {
                 job_manager_update_state(pid, JOB_STOPPED);
                 printf("\r\033[K[%d] Suspended %s\n", job->job_id, job->command);
-            } else if (WIFSIGNALED(status)) {
-                bg_finished = bg_finished || job->background;
-                printf("\r\033[K[%d] Terminated %s\n", job->job_id, job->command);
-                job_manager_remove_job(pid);
-            } else if (WIFEXITED(status)) {
-                bg_finished = bg_finished || job->background;
-                printf("\r\033[K[%d] Done %s\n", job->job_id, job->command);
+                print_prompt_pending = 1;
+            } else if (WIFSIGNALED(status) || WIFEXITED(status)) {
+                if (pid == foreground_pid) {
+                    fg_process_done = 1;
+                } else {
+                    printf("\r\033[K[%d] Done %s\n", job->job_id, job->command);
+                    print_prompt_pending = 1;
+                }
                 job_manager_remove_job(pid);
             }
         }
     }
     
-    // Only print a prompt if not waiting for a foreground job.
-    if (!fg_wait) {
-        if (in_input && bg_finished) {
+    // Only print prompt if not in foreground process and we have a pending prompt
+    if (print_prompt_pending && !fg_wait) {
+        if (in_input) {
             print_prompt();
             printf("%s", saved_input);
             if (saved_cursor < strlen(saved_input)) {
                 printf("\033[%luD", strlen(saved_input) - saved_cursor);
             }
-            fflush(stdout);
-        } else if (bg_finished && !in_input) {
+        } else {
             print_prompt();
-            fflush(stdout);
-        } else if (in_input && saved_input[0] != '\0') {
-            printf("%s%s", current_prompt, saved_input);
-            if (saved_cursor < strlen(saved_input)) {
-                printf("\033[%luD", strlen(saved_input) - saved_cursor);
-            }
-            fflush(stdout);
         }
+        fflush(stdout);
+        print_prompt_pending = 0;
     }
 }
-
 
 static void sigint_handler(int __attribute__((unused)) sig) {
     if (foreground_pid > 0) {

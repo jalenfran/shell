@@ -9,6 +9,11 @@
 #include <ctype.h>
 #include "job_manager.h"
 
+// Add these external declarations at the top of the file
+extern volatile int fg_wait;
+extern volatile int fg_process_done;
+extern volatile int print_prompt_pending;
+
 // External helper functions used in executor.c
 extern void list_jobs(void);
 extern int get_job_number(pid_t pid);
@@ -184,10 +189,15 @@ int cmd_fg(command_t *cmd) {
     if (cmd->args[1]) {
         int job_id = atoi(cmd->args[1] + 1);  // skip '%'
         pid_t pid = get_pid_by_job_id(job_id);
-        if (pid > 0)
+        if (pid > 0) {
+            fg_wait = 1;  // Set flag to prevent prompt
+            fg_process_done = 0;
+            print_prompt_pending = 0;  // Clear any pending prompts
             continue_job(pid, 1); // foreground
-        else
+            fg_wait = 0;  // Clear flag after job completes
+        } else {
             fprintf(stderr, "fg: no such job\n");
+        }
     } else {
         fprintf(stderr, "fg: missing job specifier\n");
     }
