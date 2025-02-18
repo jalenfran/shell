@@ -72,6 +72,21 @@ static command_t *parse_for(char **tokens, int *pos, int count);
 static command_t *parse_case(char **tokens, int *pos, int count);
 static command_t *parse_simple(char **tokens, int *pos, int count);
 
+// NEW: parse_pipeline() parses a series of simple commands split by '|'.
+// This ensures that pipelines are grouped before applying sequence (';') operators.
+static command_t *parse_pipeline(char **tokens, int *pos, int count) {
+    // Parse first simple command.
+    command_t *head = parse_simple(tokens, pos, count);
+    command_t *current = head;
+    // While a pipe is found, parse the next simple command and attach it.
+    while (*pos < count && strcmp(tokens[*pos], "|") == 0) {
+        (*pos)++; // Skip '|'
+        current->next = parse_simple(tokens, pos, count);
+        current = current->next;
+    }
+    return head;
+}
+
 // parse_input: tokenizes then parses recursively.
 command_t *parse_input(char *input) {
     int count = 0;
@@ -216,13 +231,14 @@ static command_t *parse_command(char **tokens, int *pos, int count) {
     } else if (strcmp(tokens[*pos], "case") == 0) {
         cmd = parse_case(tokens, pos, count);
     } else {
-        cmd = parse_simple(tokens, pos, count);
+        // Instead of a simple command, parse a pipeline
+        cmd = parse_pipeline(tokens, pos, count);
     }
 
-    // Handle command separators
     if (*pos < count) {
         if (strcmp(tokens[*pos], ";") == 0) {
             (*pos)++;  // Skip semicolon
+            // Create a new CMD_SEQUENCE command to execute sequentially.
             command_t *seq = malloc(sizeof(command_t));
             memset(seq, 0, sizeof(command_t));
             seq->type = CMD_SEQUENCE;
