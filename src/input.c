@@ -162,6 +162,10 @@ char *read_input() {
         } else if (c == '\t') { // tab pressed
             buffer[pos] = '\0';
             
+            // Save cursor and position state
+            int saved_cursor = cursor;
+            int saved_pos = pos;
+            
             // Find start of current token
             int token_start = pos;
             while (token_start > 0 && !isspace(buffer[token_start - 1])) {
@@ -176,15 +180,20 @@ char *read_input() {
             
             if (matches && count > 0) {
                 if (count == 1) {
-                    // Single match: replace current token
-                    int completion_len = strlen(matches[0]);
+                    // First move cursor to end of current token
+                    while (cursor < pos) {
+                        printf("\033[C");
+                        cursor++;
+                    }
                     
                     // Erase current token
                     for (int i = 0; i < token_len; i++) {
                         printf("\b \b");
+                        cursor--;
                     }
                     
-                    // Make space for new content if needed
+                    // Calculate new completion length
+                    int completion_len = strlen(matches[0]);
                     if (pos + completion_len - token_len >= SHELL_MAX_INPUT) {
                         completion_len = SHELL_MAX_INPUT - (pos - token_len);
                     }
@@ -201,15 +210,21 @@ char *read_input() {
                     pos = token_start + completion_len;
                     cursor = pos;
                     
-                    // Redraw the line
+                    // Print the completion
                     printf("%s", matches[0]);
                 } else {
-                    // Multiple matches: show all and redraw current line
+                    // Multiple matches: show all and redraw
                     printf("\n");
                     for (int i = 0; i < count; i++) {
                         printf("%s  ", matches[i]);
                     }
                     printf("\n%s%s", current_prompt, buffer);
+                    
+                    // Restore cursor position
+                    if (saved_cursor < strlen(buffer)) {
+                        printf("\033[%luD", strlen(buffer) - saved_cursor);
+                        cursor = saved_cursor;
+                    }
                 }
                 
                 // Free matches
@@ -221,19 +236,25 @@ char *read_input() {
                 // Try history completion
                 char *hist_match = history_find_match(current_token);
                 if (hist_match) {
-                    // Clear the entire current line
+                    // First restore cursor to end
+                    while (cursor < pos) {
+                        printf("\033[C");
+                        cursor++;
+                    }
+                    // Clear the line
                     while (pos > 0) {
                         printf("\b \b");
                         pos--;
+                        cursor--;
                     }
                     
-                    // Copy the entire history line
+                    // Copy the history line
                     strncpy(buffer, hist_match, SHELL_MAX_INPUT - 1);
                     buffer[SHELL_MAX_INPUT - 1] = '\0';
                     pos = strlen(buffer);
                     cursor = pos;
                     
-                    // Redraw the complete line
+                    // Print the new line
                     printf("%s", buffer);
                 }
             }
@@ -243,15 +264,25 @@ char *read_input() {
             if (next == '[') {
                 int arrow = getchar();
                 if (arrow == 'A' || arrow == 'B') { // up/down arrows
-                    while (pos > 0) {
-                        printf("\b \b");
-                        pos--;
+                    // First restore cursor to original position
+                    while (cursor < pos) {
+                        printf("\033[C");
+                        cursor++;
                     }
+                    while (cursor > 0) {
+                        printf("\b \b");
+                        cursor--;
+                    }
+                    // Now erase the line from here
+                    printf("\033[K");  // Clear to end of line
+                    pos = 0;  // Reset position
+
                     if (arrow == 'A' && hist_index > 0) {
                         hist_index--;
                         char *hist_entry = history_get(hist_index);
                         if (hist_entry) {
-                            strcpy(buffer, hist_entry);
+                            strncpy(buffer, hist_entry, SHELL_MAX_INPUT - 1);
+                            buffer[SHELL_MAX_INPUT - 1] = '\0';
                             pos = strlen(buffer);
                             cursor = pos;
                             printf("%s", buffer);
