@@ -5,8 +5,15 @@ typedef enum {
     CMD_SIMPLE,
     CMD_IF,
     CMD_WHILE,    // New: while loop
-    CMD_FOR       // New: for loop
+    CMD_FOR,      // New: for loop
+    CMD_CASE      // NEW: case statement
 } command_type_t;
+
+// NEW: Structure to store a case entry.
+typedef struct case_entry_t {
+    char *pattern;         // The pattern string to match
+    struct command_t *body; // Command body to execute if matched
+} case_entry_t;
 
 // Command structure to store parsed command information
 typedef struct command_t {
@@ -38,6 +45,11 @@ typedef struct command_t {
     char *for_variable;            // Loop variable name
     char **for_list;               // Array of items to iterate over (NULL-terminated)
     struct command_t *for_body;    // Command(s) to execute for each item
+
+    // NEW: For case commands.
+    char *case_expression;       // The word being matched.
+    case_entry_t **case_entries; // Array of pointers to case entries.
+    int case_entry_count;        // Number of case entries.
 
 } command_t;
 

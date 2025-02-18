@@ -63,6 +63,9 @@ static command_t *parse_while(char **tokens, int *pos, int count);
 static command_t *parse_for(char **tokens, int *pos, int count);
 static command_t *parse_simple(char **tokens, int *pos, int count);
 
+// NEW: Forward declaration for parse_case.
+static command_t *parse_case(char **tokens, int *pos, int count);
+
 // parse_input: tokenizes then parses recursively.
 command_t *parse_input(char *input) {
     int count = 0;
@@ -85,7 +88,12 @@ static command_t *parse_command(char **tokens, int *pos, int count) {
         cmd = parse_while(tokens, pos, count);
     } else if (strcmp(tokens[*pos], "for") == 0) {
         cmd = parse_for(tokens, pos, count);
-    } else {
+    }
+    // NEW: Dispatch for "case"
+    else if (strcmp(tokens[*pos], "case") == 0) {
+        cmd = parse_case(tokens, pos, count);
+    }
+    else {
         cmd = parse_simple(tokens, pos, count);
     }
     // Handle pipelines
@@ -205,6 +213,80 @@ static command_t *parse_for(char **tokens, int *pos, int count) {
     // Parse loop body until "done"
     cmd->for_body = parse_command(tokens, pos, count);
     if (*pos < count && strcmp(tokens[*pos], "done") == 0)
+        (*pos)++;
+    return cmd;
+}
+
+// Parse a case statement.
+// Expected syntax:
+//   case word in
+//       pattern1) command1 ;; 
+//       pattern2) command2 ;; 
+//       ... 
+//   esac
+static command_t *parse_case(char **tokens, int *pos, int count) {
+    command_t *cmd = malloc(sizeof(command_t));
+    memset(cmd, 0, sizeof(command_t));
+    cmd->type = CMD_CASE;
+    
+    // Skip "case"
+    (*pos)++;
+    
+    // Next token is the expression to match.
+    if (*pos < count) {
+        cmd->case_expression = strdup(tokens[*pos]);
+        (*pos)++;
+    }
+    // Expect "in"
+    if (*pos < count && strcmp(tokens[*pos], "in") == 0)
+        (*pos)++;
+    
+    // Initialize case_entries array (we'll realloc as needed)
+    cmd->case_entries = NULL;
+    cmd->case_entry_count = 0;
+    
+    // Parse each case entry until "esac" is encountered.
+    while (*pos < count && strcmp(tokens[*pos], "esac") != 0) {
+        // Skip over stray ";;" tokens.
+        if (strcmp(tokens[*pos], ";;") == 0) {
+            (*pos)++;
+            continue;
+        }
+        // Read pattern token.
+        char *pattern = strdup(tokens[*pos]);
+        // Remove trailing ')' if it exists in the pattern.
+        size_t len = strlen(pattern);
+        if (len > 0 && pattern[len-1] == ')') {
+            pattern[len-1] = '\0';
+        }
+        (*pos)++; // consume pattern token
+        
+        // If the next token is ")" (separating pattern and body), skip it.
+        if (*pos < count && strcmp(tokens[*pos], ")") == 0) {
+            (*pos)++;
+        }
+        
+        // Parse the command body for this entry.
+        command_t *body = NULL;
+        // If the next token is ";;", the body is empty.
+        if (*pos < count && strcmp(tokens[*pos], ";;") != 0) {
+            body = parse_command(tokens, pos, count);
+        }
+        
+        // Allocate or enlarge the array and store this entry.
+        cmd->case_entries = realloc(cmd->case_entries, sizeof(case_entry_t*) * (cmd->case_entry_count + 1));
+        case_entry_t *entry = malloc(sizeof(case_entry_t));
+        entry->pattern = pattern;
+        entry->body = body;
+        cmd->case_entries[cmd->case_entry_count++] = entry;
+        
+        // Skip over any stray delimiter tokens (";" or ";;") or ")" tokens.
+        while (*pos < count && (strcmp(tokens[*pos], ";") == 0 || strcmp(tokens[*pos], ")") == 0)) {
+            (*pos)++;
+        }
+    }
+    // Skip "esac"
+    if (*pos < count && strcmp(tokens[*pos], "esac") == 0)
         (*pos)++;
     return cmd;
 }

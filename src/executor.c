@@ -17,6 +17,7 @@ static void execute_if_block(command_t *cmd);
 static void execute_while(command_t *cmd);
 static void execute_for(command_t *cmd);
 static char *trim_quotes(const char *str);
+static void execute_case(command_t *cmd);
 static command_t *merge_commands(command_t *old_cmd, command_t *new_cmd);
 
 extern int num_background_processes;
@@ -474,6 +475,11 @@ void execute_command(command_t *cmd) {
         execute_for(cmd);
         return;
     }
+    // NEW: For case statements.
+    else if (cmd->type == CMD_CASE) {
+        execute_case(cmd);
+        return;
+    }
     
     if (!cmd->args[0]) return;
     
@@ -622,4 +628,26 @@ static command_t *merge_commands(command_t *old_cmd, command_t *new_cmd) {
     // The 'next' pointer remains unchanged.
     free(new_cmd);  // Free the container (its fields have been transferred)
     return old_cmd;
+}
+
+// Add a new helper for executing case statements.
+static void execute_case(command_t *cmd) {
+    // Evaluate the case expression.
+    // For simplicity, compare literally to each pattern.
+    if (!cmd->case_expression || !cmd->case_entries) return;
+    command_t *default_body = NULL;
+    for (int i = 0; i < cmd->case_entry_count; i++) {
+        case_entry_t *entry = cmd->case_entries[i];
+        printf("comparing %s to %s\n", cmd->case_expression, entry->pattern);
+        if (strcmp(entry->pattern, "*") == 0) {
+            default_body = entry->body;
+        } else if (strcmp(cmd->case_expression, entry->pattern) == 0) {
+            if (entry->body)
+                execute_command(entry->body);
+            return;
+        }
+    }
+    if (default_body) {
+        execute_command(default_body);
+    }
 }
