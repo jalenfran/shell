@@ -15,7 +15,7 @@ static char **tokenize(const char *input, int *count) {
         while (isspace(*p)) p++;
         if (!*p) break;
         // Check for control characters outside quotes
-        if (*p == ';' || *p == '&' || *p == '|' || *p == '<' || *p == '>') {
+        if (*p == ';' || *p == '&' || *p == '|' || *p == '<' || *p == '>' || *p == '(' || *p == ')') {
             // For ">>", check next character
             if (*p == '>' && *(p+1) == '>') {
                 tokens[(*count)++] = strdup(">>");
@@ -36,7 +36,7 @@ static char **tokenize(const char *input, int *count) {
             }
             if (*p == quote) p++;
         } else {
-            while (*p && !isspace(*p) && *p != ';' && *p != '&' && *p != '|' && *p != '<' && *p != '>') {
+            while (*p && !isspace(*p) && *p != ';' && *p != '&' && *p != '|' && *p != '<' && *p != '>' && *p != '(' && *p != ')') {
                 token[t++] = *p++;
             }
         }
@@ -61,10 +61,8 @@ static command_t *parse_command(char **tokens, int *pos, int count);
 static command_t *parse_if(char **tokens, int *pos, int count);
 static command_t *parse_while(char **tokens, int *pos, int count);
 static command_t *parse_for(char **tokens, int *pos, int count);
-static command_t *parse_simple(char **tokens, int *pos, int count);
-
-// NEW: Forward declaration for parse_case.
 static command_t *parse_case(char **tokens, int *pos, int count);
+static command_t *parse_simple(char **tokens, int *pos, int count);
 
 // parse_input: tokenizes then parses recursively.
 command_t *parse_input(char *input) {
@@ -82,6 +80,80 @@ command_t *parse_input(char *input) {
 static command_t *parse_command(char **tokens, int *pos, int count) {
     command_t *cmd = NULL;
     if (*pos >= count) return NULL;
+
+    // Handle subshell if it starts with '('
+    if (strcmp(tokens[*pos], "(") == 0) {
+        (*pos)++;  // Skip opening parenthesis
+        cmd = malloc(sizeof(command_t));
+        memset(cmd, 0, sizeof(command_t));
+        cmd->type = CMD_SUBSHELL;
+        
+        // Parse commands inside subshell until matching ')'
+        int nested = 1;
+        int start_pos = *pos;
+        
+        // Find matching closing parenthesis
+        while (*pos < count && nested > 0) {
+            if (strcmp(tokens[*pos], "(") == 0) {
+                nested++;
+            } else if (strcmp(tokens[*pos], ")") == 0) {
+                nested--;
+            }
+            if (nested > 0) {
+                (*pos)++;
+            }
+        }
+        
+        if (*pos >= count || nested > 0) {
+            fprintf(stderr, "Error: missing closing parenthesis\n");
+            command_free(cmd);
+            return NULL;
+        }
+        
+        // Parse the commands inside the subshell
+        cmd->subshell_cmd = parse_command(tokens + start_pos, &(int){0}, *pos - start_pos);
+        
+        (*pos)++;  // Skip the closing parenthesis
+        
+        // Handle any redirections or background after the subshell
+        while (*pos < count) {
+            if (strcmp(tokens[*pos], ">") == 0) {
+                (*pos)++;
+                if (*pos < count) {
+                    cmd->output_file = strdup(tokens[*pos]);
+                    cmd->append_output = 0;
+                    (*pos)++;
+                }
+            } else if (strcmp(tokens[*pos], ">>") == 0) {
+                (*pos)++;
+                if (*pos < count) {
+                    cmd->output_file = strdup(tokens[*pos]);
+                    cmd->append_output = 1;
+                    (*pos)++;
+                }
+            } else if (strcmp(tokens[*pos], "<") == 0) {
+                (*pos)++;
+                if (*pos < count) {
+                    cmd->input_file = strdup(tokens[*pos]);
+                    (*pos)++;
+                }
+            } else if (strcmp(tokens[*pos], "&") == 0) {
+                cmd->background = 1;
+                (*pos)++;
+            } else {
+                break;
+            }
+        }
+        
+        // Handle pipeline
+        if (*pos < count && strcmp(tokens[*pos], "|") == 0) {
+            (*pos)++; // skip "|"
+            cmd->next = parse_command(tokens, pos, count);
+        }
+        
+        return cmd;
+    }
+
     if (strcmp(tokens[*pos], "if") == 0) {
         cmd = parse_if(tokens, pos, count);
     } else if (strcmp(tokens[*pos], "while") == 0) {
@@ -349,22 +421,4 @@ static command_t *parse_simple(char **tokens, int *pos, int count) {
     if (cmd->arg_count > 0)
         cmd->command = strdup(cmd->args[0]);
     return cmd;
-}
-
-void command_free(command_t *cmd) {
-    if (!cmd) return;
-    if (cmd->type == CMD_SIMPLE) {
-        for (int i = 0; i < cmd->arg_count; i++)
-            free(cmd->args[i]);
-        free(cmd->args);
-        free(cmd->command);
-        free(cmd->input_file);
-        free(cmd->output_file);
-    } else if (cmd->type == CMD_IF) {
-        free(cmd->if_condition);
-        command_free(cmd->then_branch);
-        if (cmd->else_branch) command_free(cmd->else_branch);
-    }
-    if (cmd->next) command_free(cmd->next);
-    free(cmd);
 }

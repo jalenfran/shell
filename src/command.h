@@ -6,7 +6,8 @@ typedef enum {
     CMD_IF,
     CMD_WHILE,    // New: while loop
     CMD_FOR,      // New: for loop
-    CMD_CASE      // NEW: case statement
+    CMD_CASE,     // NEW: case statement
+    CMD_SUBSHELL  // Add this new command type
 } command_type_t;
 
 // NEW: Structure to store a case entry.
@@ -51,6 +52,12 @@ typedef struct command_t {
     case_entry_t **case_entries; // Array of pointers to case entries.
     int case_entry_count;        // Number of case entries.
 
+    // Add subshell fields
+    struct command_t *subshell_cmd;  // Commands to run in subshell
+
 } command_t;
+
+// Add the command_free declaration here so it's available to both parser.c and executor.c
+void command_free(command_t *cmd);
 
 #endif // COMMAND_H
