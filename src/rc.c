@@ -51,12 +51,15 @@ static void handle_alias(const char *line) {
             name[--len] = '\0';
         }
         
-        // Handle quoted value
         char *value = eq + 1;
+        // If value is quoted, remove the surrounding quotes properly.
         if (*value == '\'' || *value == '"') {
-            value++;
-            char *end = strrchr(value, *eq);
-            if (end) *end = '\0';
+            char quote = *value;
+            value++; // Skip the opening quote
+            size_t vlen = strlen(value);
+            if (vlen > 0 && value[vlen - 1] == quote) {
+                value[vlen - 1] = '\0';  // Remove the trailing quote
+            }
         }
         
         alias_add(name, value);

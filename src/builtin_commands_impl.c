@@ -122,21 +122,37 @@ int cmd_alias(command_t *cmd) {
         if (equals) {
             *equals = '\0';
             char *name = cmd->args[1];
-            char *value = equals + 1;
-            // Handle optional quotes
-            if (*value == '\'' || *value == '"') {
-                value++;
+            // Duplicate the alias value so it is malloc()'d.
+            char *value = strdup(equals + 1);
+            // Handle optional surrounding quotes
+            if (value[0] == '\'' || value[0] == '"') {
+                char quote = value[0];
+                // Remove the leading quote
+                memmove(value, value + 1, strlen(value));
                 size_t len = strlen(value);
-                if (len > 0 && (value[len-1]=='\'' || value[len-1]=='"'))
-                    value[len-1] = '\0';
+                if (len > 0 && value[len - 1] == quote)
+                    value[len - 1] = '\0';
             }
-            // Strip leading whitespace
-            while (*value && isspace(*value)) value++;
-            if (!*value) {
+            // If there are additional tokens, join them with a space
+            for (int i = 2; i < cmd->arg_count; i++) {
+                size_t new_len = strlen(value) + 1 + strlen(cmd->args[i]) + 1;
+                char *new_value = malloc(new_len);
+                snprintf(new_value, new_len, "%s %s", value, cmd->args[i]);
+                free(value);
+                value = new_value;
+            }
+            // Trim leading whitespace without modifying the malloced pointer:
+            char *temp = value;
+            while (*temp && isspace(*temp)) temp++;
+            char *final_value = strdup(temp);
+            free(value); // Free the original duplicated string.
+            if (!*final_value) {
                 fprintf(stderr, "alias: empty alias value not allowed\n");
+                free(final_value);
                 return 0;
             }
-            alias_add(name, value);
+            alias_add(name, final_value);
+            free(final_value);
         } else {
             char *alias_value = alias_get(cmd->args[1]);
             if (alias_value)
