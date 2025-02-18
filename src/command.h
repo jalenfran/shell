@@ -7,7 +7,10 @@ typedef enum {
     CMD_WHILE,    // New: while loop
     CMD_FOR,      // New: for loop
     CMD_CASE,     // NEW: case statement
-    CMD_SUBSHELL  // Add this new command type
+    CMD_SUBSHELL, // Add this new command type
+    CMD_AND,      // Add this
+    CMD_OR,       // Add this
+    CMD_SEQUENCE  // Add this new type for semicolon-separated commands
 } command_type_t;
 
 // NEW: Structure to store a case entry.
@@ -28,6 +31,7 @@ typedef struct command_t {
     char *output_file;      // Output redirection file
     int append_output;      // Flag for append mode (>>)
     int background;         // Flag for background execution
+    int last_status;        // Exit status of last command
     struct command_t *next; // Next command in pipeline
 
     // New flag to indicate alias expansion has been performed.

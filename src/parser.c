@@ -7,6 +7,7 @@
 #include <stdlib.h> // for getenv
 
 // Updated tokenize: also split on '|', '<', '>' (handle ">>" as one token)
+// Update tokenize function to recognize && and ||
 static char **tokenize(const char *input, int *count) {
     char **tokens = malloc(sizeof(char*) * 256);
     *count = 0;
@@ -16,8 +17,15 @@ static char **tokenize(const char *input, int *count) {
         if (!*p) break;
         // Check for control characters outside quotes
         if (*p == ';' || *p == '&' || *p == '|' || *p == '<' || *p == '>' || *p == '(' || *p == ')') {
+            // Check for && and ||
+            if ((*p == '&' && *(p+1) == '&') || 
+                (*p == '|' && *(p+1) == '|')) {
+                char token[3] = {*p, *p, '\0'};  // Fixed multi-char constant issue
+                tokens[(*count)++] = strdup(token);
+                p += 2;
+            }
             // For ">>", check next character
-            if (*p == '>' && *(p+1) == '>') {
+            else if (*p == '>' && *(p+1) == '>') {
                 tokens[(*count)++] = strdup(">>");
                 p += 2;
             } else {
@@ -77,6 +85,7 @@ command_t *parse_input(char *input) {
 }
 
 // Updated parse_command: dispatches based on tokens and chains pipelines.
+// Update parse_command to handle && and ||
 static command_t *parse_command(char **tokens, int *pos, int count) {
     command_t *cmd = NULL;
     if (*pos >= count) return NULL;
@@ -88,34 +97,84 @@ static command_t *parse_command(char **tokens, int *pos, int count) {
         memset(cmd, 0, sizeof(command_t));
         cmd->type = CMD_SUBSHELL;
         
-        // Parse commands inside subshell until matching ')'
-        int nested = 1;
-        int start_pos = *pos;
-        
         // Find matching closing parenthesis
-        while (*pos < count && nested > 0) {
-            if (strcmp(tokens[*pos], "(") == 0) {
-                nested++;
-            } else if (strcmp(tokens[*pos], ")") == 0) {
-                nested--;
+        int paren_count = 1;
+        int start_pos = *pos;
+        int end_pos = start_pos;
+        
+        while (end_pos < count && paren_count > 0) {
+            if (strcmp(tokens[end_pos], "(") == 0) {
+                paren_count++;
+            } else if (strcmp(tokens[end_pos], ")") == 0) {
+                paren_count--;
             }
-            if (nested > 0) {
-                (*pos)++;
+            if (paren_count > 0) {
+                end_pos++;
             }
         }
         
-        if (*pos >= count || nested > 0) {
+        if (end_pos >= count || paren_count > 0) {
             fprintf(stderr, "Error: missing closing parenthesis\n");
             command_free(cmd);
             return NULL;
         }
         
-        // Parse the commands inside the subshell
-        cmd->subshell_cmd = parse_command(tokens + start_pos, &(int){0}, *pos - start_pos);
+        // Parse commands inside the subshell
+        command_t *last = NULL;
+        int sub_pos = 0;
+        int sub_count = end_pos - start_pos;
         
-        (*pos)++;  // Skip the closing parenthesis
+        while (sub_pos < sub_count) {
+            command_t *sub_cmd = NULL;
+            // Check for control structures inside subshell
+            if (strcmp(tokens[start_pos + sub_pos], "if") == 0) {
+                sub_cmd = parse_if(tokens + start_pos, &sub_pos, sub_count);
+            } else if (strcmp(tokens[start_pos + sub_pos], "while") == 0) {
+                sub_cmd = parse_while(tokens + start_pos, &sub_pos, sub_count);
+            } else if (strcmp(tokens[start_pos + sub_pos], "for") == 0) {
+                sub_cmd = parse_for(tokens + start_pos, &sub_pos, sub_count);
+            } else if (strcmp(tokens[start_pos + sub_pos], "case") == 0) {
+                sub_cmd = parse_case(tokens + start_pos, &sub_pos, sub_count);
+            } else {
+                sub_cmd = parse_simple(tokens + start_pos, &sub_pos, sub_count);
+            }
+
+            if (sub_cmd) {
+                if (!cmd->subshell_cmd) {
+                    cmd->subshell_cmd = sub_cmd;
+                    last = sub_cmd;
+                } else {
+                    // Link commands with command separator (CMD_SEQUENCE)
+                    command_t *seq = malloc(sizeof(command_t));
+                    memset(seq, 0, sizeof(command_t));
+                    seq->type = CMD_SEQUENCE;
+                    seq->then_branch = last;
+                    seq->else_branch = sub_cmd;
+                    if (last == cmd->subshell_cmd) {
+                        cmd->subshell_cmd = seq;
+                    } else {
+                        // Find the last sequence and update its else_branch
+                        command_t *prev = cmd->subshell_cmd;
+                        while (prev->type == CMD_SEQUENCE && prev->else_branch != last) {
+                            prev = prev->else_branch;
+                        }
+                        if (prev->type == CMD_SEQUENCE) {
+                            prev->else_branch = seq;
+                        }
+                    }
+                    last = sub_cmd;
+                }
+            }
+
+            // Skip semicolons between commands
+            while (sub_pos < sub_count && strcmp(tokens[start_pos + sub_pos], ";") == 0) {
+                sub_pos++;
+            }
+        }
         
-        // Handle any redirections or background after the subshell
+        *pos = end_pos + 1;  // Skip past closing parenthesis
+        
+        // Handle redirections and background after the closing parenthesis
         while (*pos < count) {
             if (strcmp(tokens[*pos], ">") == 0) {
                 (*pos)++;
@@ -144,35 +203,46 @@ static command_t *parse_command(char **tokens, int *pos, int count) {
                 break;
             }
         }
-        
-        // Handle pipeline
-        if (*pos < count && strcmp(tokens[*pos], "|") == 0) {
-            (*pos)++; // skip "|"
-            cmd->next = parse_command(tokens, pos, count);
-        }
-        
         return cmd;
     }
 
+    // Parse other command types
     if (strcmp(tokens[*pos], "if") == 0) {
         cmd = parse_if(tokens, pos, count);
     } else if (strcmp(tokens[*pos], "while") == 0) {
         cmd = parse_while(tokens, pos, count);
     } else if (strcmp(tokens[*pos], "for") == 0) {
         cmd = parse_for(tokens, pos, count);
-    }
-    // NEW: Dispatch for "case"
-    else if (strcmp(tokens[*pos], "case") == 0) {
+    } else if (strcmp(tokens[*pos], "case") == 0) {
         cmd = parse_case(tokens, pos, count);
-    }
-    else {
+    } else {
         cmd = parse_simple(tokens, pos, count);
     }
-    // Handle pipelines
-    if (*pos < count && strcmp(tokens[*pos], "|") == 0) {
-        (*pos)++; // skip "|"
-        cmd->next = parse_command(tokens, pos, count);
+
+    // Handle command separators
+    if (*pos < count) {
+        if (strcmp(tokens[*pos], ";") == 0) {
+            (*pos)++;  // Skip semicolon
+            command_t *seq = malloc(sizeof(command_t));
+            memset(seq, 0, sizeof(command_t));
+            seq->type = CMD_SEQUENCE;
+            seq->then_branch = cmd;
+            seq->else_branch = parse_command(tokens, pos, count);
+            return seq;
+        } else if (strcmp(tokens[*pos], "&&") == 0 || strcmp(tokens[*pos], "||") == 0) {
+            command_t *logical_cmd = malloc(sizeof(command_t));
+            memset(logical_cmd, 0, sizeof(command_t));
+            logical_cmd->type = (strcmp(tokens[*pos], "&&") == 0) ? CMD_AND : CMD_OR;
+            (*pos)++;  // Skip the operator
+            logical_cmd->then_branch = cmd;
+            logical_cmd->else_branch = parse_command(tokens, pos, count);
+            return logical_cmd;
+        } else if (strcmp(tokens[*pos], "|") == 0) {
+            (*pos)++;
+            cmd->next = parse_command(tokens, pos, count);
+        }
     }
+
     return cmd;
 }
 
@@ -384,7 +454,9 @@ static command_t *parse_simple(char **tokens, int *pos, int count) {
             strcmp(tokens[*pos], "do") == 0 ||
             strcmp(tokens[*pos], "done") == 0 ||
             strcmp(tokens[*pos], ";") == 0 ||   // <-- semicolon handled here
-            strcmp(tokens[*pos], "|") == 0)
+            strcmp(tokens[*pos], "|") == 0 ||
+            strcmp(tokens[*pos], "&&") == 0 ||  // Add this line
+            strcmp(tokens[*pos], "||") == 0)    // Add this line
             break;
         // Check for background token '&'
         if (strcmp(tokens[*pos], "&") == 0) {

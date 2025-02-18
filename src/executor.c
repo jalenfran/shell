@@ -6,6 +6,7 @@
 #include <sys/wait.h>
 #include <signal.h>
 #include <ctype.h>
+#include <errno.h>
 #include "shell.h"
 #include "alias.h"
 #include "command_registry.h"
@@ -456,9 +457,17 @@ static void execute_pipeline(command_t *cmd) {
     }
     
     if (!cmd->background) {
-        // ...existing wait for all child processes...
+        int status;
         for (int i = 0; i < n; i++) {
-            waitpid(pids[i], NULL, 0);
+            if (waitpid(pids[i], &status, 0) > 0) {
+                if (i == n-1) {  // Save status of last command in pipeline
+                    if (WIFEXITED(status)) {
+                        cmd->last_status = WEXITSTATUS(status);
+                    } else {
+                        cmd->last_status = status;
+                    }
+                }
+            }
         }
     } else {
         // No waiting; add to background jobs:
@@ -472,26 +481,49 @@ static void execute_pipeline(command_t *cmd) {
  * Handles built-ins, pipes, and external commands
  */
 void execute_command(command_t *cmd) {
-    // Dispatch control structures first.
-    if (cmd->type == CMD_IF) {
-        execute_if_block(cmd);
-        return;
-    } else if (cmd->type == CMD_WHILE) {
-        execute_while(cmd);
-        return;
-    } else if (cmd->type == CMD_FOR) {
-        execute_for(cmd);
+    if (!cmd) return;
+
+    // Handle logical operators only once at the top.
+    if (cmd->type == CMD_AND || cmd->type == CMD_OR) {
+        execute_command(cmd->then_branch);
+        int last_status = cmd->then_branch->last_status;
+        // For &&, run right side only if left returned 0; for ||, only if nonzero.
+        if ((cmd->type == CMD_AND && last_status == 0) ||
+            (cmd->type == CMD_OR && last_status != 0)) {
+            execute_command(cmd->else_branch);
+            cmd->last_status = cmd->else_branch->last_status;
+        } else {
+            cmd->last_status = last_status;
+        }
         return;
     }
-    // NEW: For case statements.
-    else if (cmd->type == CMD_CASE) {
-        execute_case(cmd);
+
+    // Handle command sequences.
+    if (cmd->type == CMD_SEQUENCE) {
+        execute_command(cmd->then_branch);  // Execute first command
+        execute_command(cmd->else_branch);    // Execute second command
         return;
     }
-    // NEW: For subshell commands.
-    else if (cmd->type == CMD_SUBSHELL) {
-        execute_subshell(cmd);
-        return;
+
+    // Handle other command types
+    switch (cmd->type) {
+        case CMD_IF:
+            execute_if_block(cmd);
+            return;
+        case CMD_WHILE:
+            execute_while(cmd);
+            return;
+        case CMD_FOR:
+            execute_for(cmd);
+            return;
+        case CMD_CASE:
+            execute_case(cmd);
+            return;
+        case CMD_SUBSHELL:
+            execute_subshell(cmd);
+            return;
+        default:
+            break;
     }
     
     if (!cmd->args[0]) return;
@@ -546,8 +578,8 @@ void execute_command(command_t *cmd) {
         }
 
         if (execvp(cmd->args[0], cmd->args) == -1) {
-            perror("execvp");
-            exit(EXIT_FAILURE);
+            fprintf(stderr, "%s: command not found\n", cmd->args[0]);
+            _exit(127);  // Exit with 127 for command not found
         }
     } else if (pid > 0) {
         setpgid(pid, pid); // place child in its own group
@@ -558,7 +590,30 @@ void execute_command(command_t *cmd) {
             set_foreground_pid(pid);
             tcsetpgrp(STDIN_FILENO, pid);
             int status;
-            waitpid(pid, &status, WUNTRACED);
+            {
+                // Block SIGCHLD to prevent foreground reaping before waitpid.
+                sigset_t block, prev;
+                sigemptyset(&block);
+                sigaddset(&block, SIGCHLD);
+                sigprocmask(SIG_BLOCK, &block, &prev);
+                
+                waitpid(pid, &status, WUNTRACED);
+                
+                // Restore previous signal mask.
+                sigprocmask(SIG_SETMASK, &prev, NULL);
+            }
+            
+            // Store raw status without any modification
+            cmd->last_status = status;
+            
+            if (WIFEXITED(status)) {
+                // Store the actual exit code
+                cmd->last_status = WEXITSTATUS(status);
+            } else if (WIFSIGNALED(status)) {
+                cmd->last_status = 128 + WTERMSIG(status);
+            } else {
+                cmd->last_status = 1;
+            }
             tcsetpgrp(STDIN_FILENO, getpgrp());
             set_foreground_pid(0);
             if (WIFSTOPPED(status)) {
@@ -578,27 +633,28 @@ void execute_command(command_t *cmd) {
     }
 }
 
-// Update sigchld_handler to print termination messages only for background jobs:
+// Update sigchld_handler to handle only background jobs
 void sigchld_handler(int __attribute__((unused)) sig) {
     pid_t pid;
     int status;
     while ((pid = waitpid(-1, &status, WNOHANG | WUNTRACED | WCONTINUED)) > 0) {
         job_t *job = job_manager_get_job_by_pid(pid);
-        if (job) {
-            if (WIFCONTINUED(status)) {
-                job_manager_update_state(pid, JOB_RUNNING);
-            } else if (WIFSTOPPED(status)) {
-                job_manager_update_state(pid, JOB_STOPPED);
-                printf("\r\033[K[%d] Suspended %s\n", job->job_id, job->command);
-            } else if (WIFSIGNALED(status)) {
-                if (job->background)
-                    printf("\r\033[K[%d] Terminated %s\n", job->job_id, job->command);
-                job_manager_remove_job(pid);
-            } else if (WIFEXITED(status)) {
-                if (job->background)
-                    printf("\r\033[K[%d] Done %s\n", job->job_id, job->command);
-                job_manager_remove_job(pid);
-            }
+        if (!job) {  // Foreground process; skip so that execute_command() can wait.
+            continue;
+        }
+        if (WIFCONTINUED(status)) {
+            job_manager_update_state(pid, JOB_RUNNING);
+        } else if (WIFSTOPPED(status)) {
+            job_manager_update_state(pid, JOB_STOPPED);
+            printf("\r\033[K[%d] Suspended %s\n", job->job_id, job->command);
+        } else if (WIFSIGNALED(status)) {
+            if (job->background)
+                printf("\r\033[K[%d] Terminated %s\n", job->job_id, job->command);
+            job_manager_remove_job(pid);
+        } else if (WIFEXITED(status)) {
+            if (job->background)
+                printf("\r\033[K[%d] Done %s\n", job->job_id, job->command);
+            job_manager_remove_job(pid);
         }
     }
 }
@@ -665,13 +721,13 @@ static void execute_case(command_t *cmd) {
     }
 }
 
-// NEW: Helper function to execute subshell commands.
 static void execute_subshell(command_t *cmd) {
     
     pid_t pid = fork();
     
     if (pid == 0) {
         // Child process: create new process group
+        
         setpgid(0, 0);
         
         // Reset signal handlers
@@ -726,9 +782,58 @@ static void execute_subshell(command_t *cmd) {
 
 void command_free(command_t *cmd) {
     if (!cmd) return;
-    // ...existing code...
-    if (cmd->type == CMD_SUBSHELL) {
+    
+    // Free command name and args
+    if (cmd->command) free(cmd->command);
+    if (cmd->args) {
+        for (int i = 0; i < cmd->arg_count; i++) {
+            free(cmd->args[i]);
+        }
+        free(cmd->args);
+    }
+    
+    // Free redirection files
+    if (cmd->input_file) free(cmd->input_file);
+    if (cmd->output_file) free(cmd->output_file);
+    
+    // Free control structure fields
+    if (cmd->if_condition) free(cmd->if_condition);
+    if (cmd->then_branch) command_free(cmd->then_branch);
+    if (cmd->else_branch) command_free(cmd->else_branch);
+    if (cmd->while_condition) free(cmd->while_condition);
+    if (cmd->while_body) command_free(cmd->while_body);
+    if (cmd->for_variable) free(cmd->for_variable);
+    if (cmd->for_list) {
+        for (int i = 0; cmd->for_list[i]; i++) {
+            free(cmd->for_list[i]);
+        }
+        free(cmd->for_list);
+    }
+    if (cmd->for_body) command_free(cmd->for_body);
+    
+    // Free subshell command if present
+    if (cmd->type == CMD_SUBSHELL && cmd->subshell_cmd) {
         command_free(cmd->subshell_cmd);
     }
-    // ...existing code...
+    
+    // Free case statement resources
+    if (cmd->case_expression) free(cmd->case_expression);
+    if (cmd->case_entries) {
+        for (int i = 0; i < cmd->case_entry_count; i++) {
+            if (cmd->case_entries[i]) {
+                if (cmd->case_entries[i]->pattern) 
+                    free(cmd->case_entries[i]->pattern);
+                if (cmd->case_entries[i]->body)
+                    command_free(cmd->case_entries[i]->body);
+                free(cmd->case_entries[i]);
+            }
+        }
+        free(cmd->case_entries);
+    }
+    
+    // Free pipeline next command
+    if (cmd->next) command_free(cmd->next);
+    
+    // Finally free the command structure itself
+    free(cmd);
 }
