@@ -74,7 +74,7 @@ static const char *HELP_TEXT =
     "\033[1;36m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m\n";
 
 // help command
-int cmd_help(command_t *cmd) {
+int cmd_help(command_t * __attribute__((unused)) cmd) {
     // Mimic executor.c's logic: print help text (or list registry commands)
     printf("%s", HELP_TEXT);
     return 0;
@@ -93,7 +93,7 @@ int cmd_cd(command_t *cmd) {
 }
 
 // exit command
-int cmd_exit(command_t *cmd) {
+int cmd_exit(command_t * __attribute__((unused)) cmd) {
     exit(0);
     return 0;
 }
@@ -158,7 +158,7 @@ int cmd_unalias(command_t *cmd) {
 }
 
 // jobs command
-int cmd_jobs(command_t *cmd) {
+int cmd_jobs(command_t * __attribute__((unused)) cmd) {
     list_jobs();
     return 0;
 }
@@ -236,7 +236,7 @@ int cmd_unset(command_t *cmd) {
 }
 
 // env command
-int cmd_env(command_t *cmd) {
+int cmd_env(command_t * __attribute__((unused)) cmd) {
     extern char **environ;
     for (char **env = environ; *env; env++)
         printf("%s\n", *env);

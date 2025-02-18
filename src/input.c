@@ -162,9 +162,8 @@ char *read_input() {
         } else if (c == '\t') { // tab pressed
             buffer[pos] = '\0';
             
-            // Save cursor and position state
+            // Save cursor state
             int saved_cursor = cursor;
-            int saved_pos = pos;
             
             // Find start of current token
             int token_start = pos;
@@ -221,7 +220,7 @@ char *read_input() {
                     printf("\n%s%s", current_prompt, buffer);
                     
                     // Restore cursor position
-                    if (saved_cursor < strlen(buffer)) {
+                    if ((size_t)saved_cursor < strlen(buffer)) {
                         printf("\033[%luD", strlen(buffer) - saved_cursor);
                         cursor = saved_cursor;
                     }
