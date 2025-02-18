@@ -453,9 +453,16 @@ static void execute_pipeline(command_t *cmd) {
         close(pipes[i][0]);
         close(pipes[i][1]);
     }
-    // Wait for all child processes.
-    for (int i = 0; i < n; i++) {
-        waitpid(pids[i], NULL, 0);
+    
+    if (!cmd->background) {
+        // ...existing wait for all child processes...
+        for (int i = 0; i < n; i++) {
+            waitpid(pids[i], NULL, 0);
+        }
+    } else {
+        // No waiting; add to background jobs:
+        job_manager_add_job(pids[0], "pipeline", 1);
+        printf("[%d] %d\n", get_job_number(pids[0]), pids[0]);
     }
 }
 
