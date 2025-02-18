@@ -310,7 +310,7 @@ void shell_loop(void) {
         cmd = parse_input(input);
         if (cmd) {
             // Now, if the command is an if block, execute it regardless of cmd->command.
-            if (cmd->type == CMD_IF) {
+            if (cmd->type == CMD_IF || cmd->type == CMD_WHILE || cmd->type == CMD_FOR) {
                 execute_command(cmd);
             }
             else if (cmd->command) {

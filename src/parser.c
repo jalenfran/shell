@@ -59,6 +59,8 @@ static char *expand_variables_in_token(const char *token) {
 // Forward declarations for recursive descent
 static command_t *parse_command(char **tokens, int *pos, int count);
 static command_t *parse_if(char **tokens, int *pos, int count);
+static command_t *parse_while(char **tokens, int *pos, int count);
+static command_t *parse_for(char **tokens, int *pos, int count);
 static command_t *parse_simple(char **tokens, int *pos, int count);
 
 // parse_input: tokenizes then parses recursively.
@@ -75,13 +77,18 @@ command_t *parse_input(char *input) {
 
 // Updated parse_command: dispatches based on tokens and chains pipelines.
 static command_t *parse_command(char **tokens, int *pos, int count) {
-    command_t *cmd;
-    if (*pos < count && strcmp(tokens[*pos], "if") == 0) {
+    command_t *cmd = NULL;
+    if (*pos >= count) return NULL;
+    if (strcmp(tokens[*pos], "if") == 0) {
         cmd = parse_if(tokens, pos, count);
+    } else if (strcmp(tokens[*pos], "while") == 0) {
+        cmd = parse_while(tokens, pos, count);
+    } else if (strcmp(tokens[*pos], "for") == 0) {
+        cmd = parse_for(tokens, pos, count);
     } else {
         cmd = parse_simple(tokens, pos, count);
     }
-    // Check if next token is a pipe, then build pipeline chain.
+    // Handle pipelines
     if (*pos < count && strcmp(tokens[*pos], "|") == 0) {
         (*pos)++; // skip "|"
         cmd->next = parse_command(tokens, pos, count);
@@ -133,12 +140,72 @@ static command_t *parse_if(char **tokens, int *pos, int count) {
     // Check for optional "else"
     if (*pos < count && strcmp(tokens[*pos], "else") == 0) {
         (*pos)++;
-        cmd->else_branch = parse_command(tokens, pos, count);
+        // If the next token is "if", treat it as else-if block recursively.
+        if (*pos < count && strcmp(tokens[*pos], "if") == 0) {
+            cmd->else_branch = parse_if(tokens, pos, count);
+        } else {
+            cmd->else_branch = parse_command(tokens, pos, count);
+        }
     }
     // Expect "fi"
     if (*pos < count && strcmp(tokens[*pos], "fi") == 0) {
         (*pos)++;
     }
+    return cmd;
+}
+
+// New parse_while: Syntax: while condition do <body> done
+static command_t *parse_while(char **tokens, int *pos, int count) {
+    command_t *cmd = malloc(sizeof(command_t));
+    memset(cmd, 0, sizeof(command_t));
+    cmd->type = CMD_WHILE;
+    (*pos)++; // skip "while"
+    // Collect condition tokens until "do" is found
+    char cond[1024] = {0};
+    while (*pos < count && strcmp(tokens[*pos], "do") != 0) {
+        strcat(cond, tokens[*pos]);
+        strcat(cond, " ");
+        (*pos)++;
+    }
+    cmd->while_condition = strdup(cond);
+    if (*pos < count && strcmp(tokens[*pos], "do") == 0)
+        (*pos)++; // skip "do"
+    // Parse the loop body until "done"
+    cmd->while_body = parse_command(tokens, pos, count);
+    if (*pos < count && strcmp(tokens[*pos], "done") == 0)
+        (*pos)++;
+    return cmd;
+}
+
+// New parse_for: Syntax: for var in item1 item2 ... do <body> done
+static command_t *parse_for(char **tokens, int *pos, int count) {
+    command_t *cmd = malloc(sizeof(command_t));
+    memset(cmd, 0, sizeof(command_t));
+    cmd->type = CMD_FOR;
+    (*pos)++; // skip "for"
+    // Next token should be variable
+    if (*pos < count) {
+        cmd->for_variable = strdup(tokens[*pos]);
+        (*pos)++;
+    }
+    // Expect "in"
+    if (*pos < count && strcmp(tokens[*pos], "in") == 0)
+        (*pos)++;
+    // Collect list of items until "do" is encountered
+    char **list = malloc(sizeof(char*) * 64);
+    int list_count = 0;
+    while (*pos < count && strcmp(tokens[*pos], "do") != 0) {
+        list[list_count++] = strdup(tokens[*pos]);
+        (*pos)++;
+    }
+    list[list_count] = NULL;
+    cmd->for_list = list;
+    if (*pos < count && strcmp(tokens[*pos], "do") == 0)
+        (*pos)++; // skip "do"
+    // Parse loop body until "done"
+    cmd->for_body = parse_command(tokens, pos, count);
+    if (*pos < count && strcmp(tokens[*pos], "done") == 0)
+        (*pos)++;
     return cmd;
 }
 
@@ -155,13 +222,16 @@ static command_t *parse_simple(char **tokens, int *pos, int count) {
     while (*pos < count) {
         // Stop if a control token is encountered (if, then, else, fi, ;, |) 
         if (strcmp(tokens[*pos], "if") == 0 ||
+            strcmp(tokens[*pos], "while") == 0 ||
+            strcmp(tokens[*pos], "for") == 0 ||
             strcmp(tokens[*pos], "then") == 0 ||
             strcmp(tokens[*pos], "else") == 0 ||
             strcmp(tokens[*pos], "fi") == 0 ||
-            strcmp(tokens[*pos], ";") == 0 ||
-            strcmp(tokens[*pos], "|") == 0) {
+            strcmp(tokens[*pos], "do") == 0 ||
+            strcmp(tokens[*pos], "done") == 0 ||
+            strcmp(tokens[*pos], ";") == 0 ||   // <-- semicolon handled here
+            strcmp(tokens[*pos], "|") == 0)
             break;
-        }
         // Check for background token '&'
         if (strcmp(tokens[*pos], "&") == 0) {
             cmd->background = 1;

@@ -10,12 +10,14 @@
 #include "alias.h"
 #include "command_registry.h"
 #include "job_manager.h"
-#include "command.h"
-#include <ctype.h>  // for isspace
-#include <sys/types.h>
 
-// Forward declaration for the new trim_quotes function.
+// Forward declarations for missing functions:
+static int evaluate_condition(const char *cond);
+static void execute_if_block(command_t *cmd);
+static void execute_while(command_t *cmd);
+static void execute_for(command_t *cmd);
 static char *trim_quotes(const char *str);
+static command_t *merge_commands(command_t *old_cmd, command_t *new_cmd);
 
 extern int num_background_processes;
 extern pid_t background_processes[];
@@ -135,8 +137,6 @@ void continue_job(pid_t pid, int foreground) {
     }
 
     if (foreground) {
-        extern volatile int fg_wait;  // Use the global flag defined in main.c
-        fg_wait = 1;
         tcsetpgrp(STDIN_FILENO, pid);
         int status;
         // Wait in a loop until the process terminates or stops again.
@@ -147,7 +147,6 @@ void continue_job(pid_t pid, int foreground) {
                 break;
         }
         tcsetpgrp(STDIN_FILENO, getpgrp());
-        fg_wait = 0; // Clear the flag so SIGCHLD handler may print prompt if needed.
         if (WIFSTOPPED(status)) {
             const char *cmd_str = get_process_command(pid);
             printf("\n[%d] Stopped %s\n", get_job_number(pid), cmd_str);
@@ -171,24 +170,31 @@ void kill_job(int job_id) {
  * Returns 1 if command was handled, 0 otherwise
  */
 static int check_alias_expansion(command_t *cmd) {
+
+    // Check for alias expansion
     if (cmd->args[0]) {
         char *alias_cmd = alias_get(cmd->args[0]);
-        if (alias_cmd) { // Always expand alias if defined
+        if (alias_cmd && !is_recursive_alias(cmd->args[0], 0)) {
+            // NEW: Trim matching quotes from alias_cmd.
             char *trimmed_alias = trim_quotes(alias_cmd);
-            printf("Alias expanded: %s\n", trimmed_alias);
-            char expanded[SHELL_MAX_INPUT] = {0};
-            // Start with the alias expansion
-            snprintf(expanded, SHELL_MAX_INPUT, "%s", trimmed_alias);
-            // Append any extra arguments from the original command
-            for (int i = 1; i < cmd->arg_count; i++) {
-                strncat(expanded, " ", SHELL_MAX_INPUT - strlen(expanded) - 1);
-                strncat(expanded, cmd->args[i], SHELL_MAX_INPUT - strlen(expanded) - 1);
+            char *expanded = malloc(SHELL_MAX_INPUT);
+            
+            // First copy the alias command
+            strncpy(expanded, trimmed_alias, SHELL_MAX_INPUT - 1);
+            
+            // Then append any additional arguments
+            for (int i = 1; cmd->args[i]; i++) {
+                strcat(expanded, " ");
+                strcat(expanded, cmd->args[i]);
             }
-            free(trimmed_alias);
-            // Parse the expanded command string
+            
+            // Parse the expanded command
             command_t *new_cmd = parse_input(expanded);
+            free(expanded);
+            free(trimmed_alias);
+            
             if (new_cmd) {
-                // If the original command had any redirection, merge these settings.
+                // If original command had redirection, merge it with new command
                 if (!new_cmd->output_file && cmd->output_file) {
                     new_cmd->output_file = strdup(cmd->output_file);
                     new_cmd->append_output = cmd->append_output;
@@ -196,14 +202,33 @@ static int check_alias_expansion(command_t *cmd) {
                 if (!new_cmd->input_file && cmd->input_file) {
                     new_cmd->input_file = strdup(cmd->input_file);
                 }
+                
+                // Copy background state
                 new_cmd->background = cmd->background;
+                
                 execute_command(new_cmd);
                 command_free(new_cmd);
                 return 1;
             }
         }
     }
+
     return 0;
+}
+
+// NEW: Helper to remove matching leading/trailing quotes.
+static char *trim_quotes(const char *str) {
+    if (!str) return NULL;
+    // Skip any leading quotes (single or double)
+    while (*str == '"' || *str == '\'') {
+        str++;
+    }
+    size_t len = strlen(str);
+    // Remove trailing quotes (single or double)
+    while (len > 0 && (str[len - 1] == '"' || str[len - 1] == '\'')) {
+        len--;
+    }
+    return strndup(str, len);
 }
 
 // Move helper function definition before it's used
@@ -287,54 +312,91 @@ int execute_script(const char *filename) {
     return 0;
 }
 
-// New helper function to trim whitespace from both ends of a string.
-static char *trim_str(const char *str) {
-    if (!str) return NULL;
-    // Skip leading whitespace.
-    while (isspace(*str)) {
-        str++;
-    }
-    // Duplicate the rest.
-    char *dup = strdup(str);
-    if (!dup) return NULL;
-    // Trim trailing whitespace.
-    int len = strlen(dup);
-    while (len > 0 && isspace(dup[len - 1])) {
-        dup[len - 1] = '\0';
-        len--;
-    }
-    return dup;
-}
-
-// Updated condition evaluator using system() and trimmed condition
+// NEW: Minimal implementation for evaluate_condition (uses system())
 static int evaluate_condition(const char *cond) {
     if (!cond || strlen(cond) == 0) return 0;
-    char *trimmed = trim_str(cond);
-    if (!trimmed) return 0;
+    char *trimmed = strdup(cond); // In practice, trim whitespace as needed
     int ret = system(trimmed);
     free(trimmed);
-    // system() returns 0 when the command exits with status 0.
+    // system() returns 0 if command succeeded
     return (ret == 0);
 }
 
-// New helper function to execute if-block commands
+// NEW: Helper function to execute if-block commands.
 static void execute_if_block(command_t *cmd) {
-    if (evaluate_condition(cmd->if_condition)) {
+    if (evaluate_condition(cmd->if_condition))
         execute_command(cmd->then_branch);
-    } else if (cmd->else_branch) {
+    else if (cmd->else_branch)
         execute_command(cmd->else_branch);
+}
+
+static void execute_while(command_t *cmd) {
+    while (evaluate_condition(cmd->while_condition)) {
+        execute_command(cmd->while_body);
     }
 }
 
-// New helper function to execute a full pipeline (more than two commands)
+static void execute_for(command_t *cmd) {
+    for (int i = 0; cmd->for_list && cmd->for_list[i] != NULL; i++) {
+        setenv(cmd->for_variable, cmd->for_list[i], 1);
+        execute_command(cmd->for_body);
+    }
+}
+
+static command_t *expand_alias_for_pipeline(command_t *cmd) {
+    if (!cmd || !cmd->args[0])
+        return cmd;
+    // If already expanded, skip further work.
+    if (cmd->alias_expanded)
+        return cmd;
+    char *alias_str = alias_get(cmd->args[0]);
+    if (!alias_str || is_recursive_alias(cmd->args[0], 0))
+        return cmd;
+    char *trimmed = trim_quotes(alias_str);
+    char buffer[SHELL_MAX_INPUT] = {0};
+    snprintf(buffer, SHELL_MAX_INPUT, "%s", trimmed);
+    free(trimmed);
+    for (int i = 1; cmd->args[i]; i++) {
+        strcat(buffer, " ");
+        strcat(buffer, cmd->args[i]);
+    }
+    command_t *expanded_cmd = parse_input(buffer);
+    if (expanded_cmd) {
+        // Copy redirection and background settings from the original command.
+        if (cmd->output_file) {
+            if (expanded_cmd->output_file)
+                free(expanded_cmd->output_file);
+            expanded_cmd->output_file = strdup(cmd->output_file);
+            expanded_cmd->append_output = cmd->append_output;
+        }
+        if (cmd->input_file) {
+            if (expanded_cmd->input_file)
+                free(expanded_cmd->input_file);
+            expanded_cmd->input_file = strdup(cmd->input_file);
+        }
+        expanded_cmd->background = cmd->background;
+        // Preserve the pipeline chain
+        command_t *chain = cmd->next;  // Save remainder.
+        cmd->next = NULL;              // Detach current node.
+        cmd = merge_commands(cmd, expanded_cmd);
+        cmd->next = chain;             // Restore the pipeline chain.
+        cmd->alias_expanded = 1;
+    }
+    return cmd;
+}
+
 static void execute_pipeline(command_t *cmd) {
+    // Update all pipeline stages with alias expansion.
+    for (command_t **p = &cmd; *p != NULL; p = &((*p)->next)) {
+        *p = expand_alias_for_pipeline(*p);
+    }
+    
     // Count commands in pipeline
     int n = 0;
-    command_t *p = cmd;
-    while (p) { n++; p = p->next; }
-    if(n == 0) return;
+    command_t *cur = cmd;
+    while (cur) { n++; cur = cur->next; }
+    if (n == 0) return;
 
-    // Create n-1 pipes
     int pipes[n-1][2];
     for (int i = 0; i < n - 1; i++) {
         if (pipe(pipes[i]) == -1) {
@@ -343,105 +405,107 @@ static void execute_pipeline(command_t *cmd) {
         }
     }
     
-    // Fork for each command in pipeline
     pid_t pids[n];
-    p = cmd;
+    cur = cmd;
     for (int i = 0; i < n; i++) {
         pids[i] = fork();
         if (pids[i] < 0) {
             perror("fork");
             return;
         }
-        else if (pids[i] == 0) { // child process
-            // If not first command, redirect stdin to previous pipe's read end
+        else if (pids[i] == 0) {  // Child process
+            // If not first command, redirect stdin to previous pipe's read end.
             if (i > 0) {
                 dup2(pipes[i-1][0], STDIN_FILENO);
             }
-            // If not last command, redirect stdout to current pipe's write end
+            // If not last command, redirect stdout to current pipe's write end.
             if (i < n - 1) {
                 dup2(pipes[i][1], STDOUT_FILENO);
             }
-            // Close all pipe fds in child
+            // Close all pipe FDs in child.
             for (int j = 0; j < n - 1; j++) {
                 close(pipes[j][0]);
                 close(pipes[j][1]);
             }
-            // Handle redirection for the individual command if any
-            if (p->output_file != NULL) {
-                int flags = O_CREAT | O_WRONLY | ((p->append_output) ? O_APPEND : O_TRUNC);
-                int fd_out = open(p->output_file, flags, 0644);
-                if (fd_out < 0) {
-                    perror(p->output_file);
-                    exit(EXIT_FAILURE);
-                }
-                dup2(fd_out, STDOUT_FILENO);
-                close(fd_out);
-            }
-            if (p->input_file != NULL) {
-                int fd_in = open(p->input_file, O_RDONLY);
-                if (fd_in < 0) {
-                    perror(p->input_file);
-                    exit(EXIT_FAILURE);
-                }
+            // Handle any redirection defined on the individual command.
+            if (cur->input_file) {
+                int fd_in = open(cur->input_file, O_RDONLY);
+                if (fd_in < 0) { perror(cur->input_file); exit(EXIT_FAILURE); }
                 dup2(fd_in, STDIN_FILENO);
                 close(fd_in);
             }
-            // Execute the command
-            execvp(p->args[0], p->args);
-            perror("execvp");
+            if (cur->output_file) {
+                int flags = O_CREAT | O_WRONLY | (cur->append_output ? O_APPEND : O_TRUNC);
+                int fd_out = open(cur->output_file, flags, 0644);
+                if (fd_out < 0) { perror(cur->output_file); exit(EXIT_FAILURE); }
+                dup2(fd_out, STDOUT_FILENO);
+                close(fd_out);
+            }
+            execvp(cur->args[0], cur->args);
+            perror("execvp pipeline");
             exit(EXIT_FAILURE);
         }
-        p = p->next;
+        cur = cur->next;
     }
-    
-    // Parent: close all pipes
+    // Parent: close all pipe FDs.
     for (int i = 0; i < n - 1; i++) {
         close(pipes[i][0]);
         close(pipes[i][1]);
     }
-    // Wait for all child processes
+    // Wait for all child processes.
     for (int i = 0; i < n; i++) {
         waitpid(pids[i], NULL, 0);
     }
 }
 
-// Modify execute_command() to handle if commands using execute_if_block()
+/**
+ * Main command execution function
+ * Handles built-ins, pipes, and external commands
+ */
 void execute_command(command_t *cmd) {
-    if (!cmd) return;
-    
-    // If command is an if command, delegate execution
+    // Dispatch control structures first.
     if (cmd->type == CMD_IF) {
         execute_if_block(cmd);
         return;
-    }
-    
-    // NEW: If pipeline length is more than one, use execute_pipeline()
-    if (cmd->next) {
-        execute_pipeline(cmd);
+    } else if (cmd->type == CMD_WHILE) {
+        execute_while(cmd);
+        return;
+    } else if (cmd->type == CMD_FOR) {
+        execute_for(cmd);
         return;
     }
     
-    // For built-in commands and alias expansion (existing code)
+    if (!cmd->args[0]) return;
+    
+    // Handle built-in commands
     const command_entry_t *entry = lookup_command(cmd->args[0]);
     if (entry) {
         entry->func(cmd);
         return;
     }
+    // *** If there is a pipeline, bypass simple alias expansion ***
+    if (cmd->next) {
+        execute_pipeline(cmd);
+        return;
+    }
+    // Otherwise, perform alias expansion for a simple command.
     if (check_alias_expansion(cmd)) return;
     
     pid_t pid = fork();
-    if (pid == 0) {  // Child process
+    if (pid == 0) {
+        // Child process: set up new process group and reset signal handlers
         setpgid(0, 0);
         signal(SIGINT, SIG_DFL);
         signal(SIGQUIT, SIG_DFL);
-        signal(SIGTSTP, SIG_DFL);
+        signal(SIGTSTP, SIG_DFL); // <-- Reset SIGTSTP to default in the child
         signal(SIGTTIN, SIG_DFL);
         signal(SIGTTOU, SIG_DFL);
         signal(SIGCHLD, SIG_DFL);
-        
-        // Handle redirection if any
+
+        // Handle output redirection
         if (cmd->output_file != NULL) {
-            int flags = O_CREAT | O_WRONLY | ((cmd->append_output) ? O_APPEND : O_TRUNC);
+            int flags = O_CREAT | O_WRONLY;
+            flags |= (cmd->append_output) ? O_APPEND : O_TRUNC;
             int fd_out = open(cmd->output_file, flags, 0644);
             if (fd_out < 0) {
                 perror(cmd->output_file);
@@ -450,6 +514,8 @@ void execute_command(command_t *cmd) {
             dup2(fd_out, STDOUT_FILENO);
             close(fd_out);
         }
+
+        // Handle input redirection
         if (cmd->input_file != NULL) {
             int fd_in = open(cmd->input_file, O_RDONLY);
             if (fd_in < 0) {
@@ -459,15 +525,16 @@ void execute_command(command_t *cmd) {
             dup2(fd_in, STDIN_FILENO);
             close(fd_in);
         }
-        
+
         if (execvp(cmd->args[0], cmd->args) == -1) {
             perror("execvp");
             exit(EXIT_FAILURE);
         }
-    } else if (pid > 0) {  // Parent process
-        setpgid(pid, pid);
+    } else if (pid > 0) {
+        setpgid(pid, pid); // place child in its own group
         strncpy(current_command, cmd->args[0], MAX_CMD_LEN - 1);
         current_command[MAX_CMD_LEN - 1] = '\0';
+        
         if (!cmd->background) {
             set_foreground_pid(pid);
             tcsetpgrp(STDIN_FILENO, pid);
@@ -476,11 +543,14 @@ void execute_command(command_t *cmd) {
             tcsetpgrp(STDIN_FILENO, getpgrp());
             set_foreground_pid(0);
             if (WIFSTOPPED(status)) {
+                // Only add on suspend as a foreground (non‐background) job
                 job_manager_add_job(pid, current_command, 0);
                 job_manager_update_state(pid, JOB_STOPPED);
                 printf("\n[%d] Suspended %s\n", get_job_number(pid), current_command);
             }
+            // Do not print or add "Done" message for foreground jobs that exit normally.
         } else {
+            // For background jobs, add immediately with background flag set
             job_manager_add_job(pid, current_command, 1);
             printf("[%d] %d\n", get_job_number(pid), pid);
         }
@@ -514,17 +584,42 @@ void sigchld_handler(int __attribute__((unused)) sig) {
     }
 }
 
-// Updated trim_quotes: remove any leading and trailing single or double quotes.
-static char *trim_quotes(const char *str) {
-    if (!str) return NULL;
-    // Skip any leading quotes.
-    while(*str == '"' || *str == '\'') {
-        str++;
+static void free_command_fields(command_t *cmd) {
+    if (!cmd) return;
+    if (cmd->command) { free(cmd->command); cmd->command = NULL; }
+    if (cmd->args) {
+        for (int i = 0; i < cmd->arg_count; i++) {
+            free(cmd->args[i]);
+        }
+        free(cmd->args); cmd->args = NULL;
     }
-    size_t len = strlen(str);
-    // Remove trailing quotes.
-    while(len > 0 && (str[len - 1] == '"' || str[len - 1] == '\'')) {
-        len--;
+    if (cmd->input_file) { free(cmd->input_file); cmd->input_file = NULL; }
+    if (cmd->output_file) { free(cmd->output_file); cmd->output_file = NULL; }
+    if (cmd->if_condition) { free(cmd->if_condition); cmd->if_condition = NULL; }
+    if (cmd->while_condition) { free(cmd->while_condition); cmd->while_condition = NULL; }
+    if (cmd->for_variable) { free(cmd->for_variable); cmd->for_variable = NULL; }
+    if (cmd->for_list) {
+        for (int i = 0; cmd->for_list[i] != NULL; i++) {
+            free(cmd->for_list[i]);
+        }
+        free(cmd->for_list); cmd->for_list = NULL;
     }
-    return strndup(str, len);
+}
+
+// The pipeline pointer (old_cmd->next) is preserved.
+static command_t *merge_commands(command_t *old_cmd, command_t *new_cmd) {
+    // Free old fields
+    free_command_fields(old_cmd);
+    // Transfer fields from new_cmd to old_cmd
+    old_cmd->command = new_cmd->command; new_cmd->command = NULL;
+    old_cmd->args = new_cmd->args;         new_cmd->args = NULL;
+    old_cmd->arg_count = new_cmd->arg_count;
+    old_cmd->input_file = new_cmd->input_file; new_cmd->input_file = NULL;
+    old_cmd->output_file = new_cmd->output_file; new_cmd->output_file = NULL;
+    old_cmd->append_output = new_cmd->append_output;
+    old_cmd->background = new_cmd->background;
+    // For control structures, one might also copy the branches if needed.
+    // The 'next' pointer remains unchanged.
+    free(new_cmd);  // Free the container (its fields have been transferred)
+    return old_cmd;
 }
