@@ -11,6 +11,15 @@
 #include "command_registry.h"
 #include "job_manager.h"
 
+// Forward declarations for missing functions:
+static int evaluate_condition(const char *cond);
+static void execute_if_block(command_t *cmd);
+static void execute_while(command_t *cmd);
+static void execute_for(command_t *cmd);
+static char *trim_quotes(const char *str);
+static void execute_case(command_t *cmd);
+static command_t *merge_commands(command_t *old_cmd, command_t *new_cmd);
+
 extern int num_background_processes;
 extern pid_t background_processes[];
 
@@ -167,11 +176,12 @@ static int check_alias_expansion(command_t *cmd) {
     if (cmd->args[0]) {
         char *alias_cmd = alias_get(cmd->args[0]);
         if (alias_cmd && !is_recursive_alias(cmd->args[0], 0)) {
-            // Create a new command with the alias expansion
+            // NEW: Trim matching quotes from alias_cmd.
+            char *trimmed_alias = trim_quotes(alias_cmd);
             char *expanded = malloc(SHELL_MAX_INPUT);
             
             // First copy the alias command
-            strncpy(expanded, alias_cmd, SHELL_MAX_INPUT - 1);
+            strncpy(expanded, trimmed_alias, SHELL_MAX_INPUT - 1);
             
             // Then append any additional arguments
             for (int i = 1; cmd->args[i]; i++) {
@@ -182,6 +192,7 @@ static int check_alias_expansion(command_t *cmd) {
             // Parse the expanded command
             command_t *new_cmd = parse_input(expanded);
             free(expanded);
+            free(trimmed_alias);
             
             if (new_cmd) {
                 // If original command had redirection, merge it with new command
@@ -204,6 +215,21 @@ static int check_alias_expansion(command_t *cmd) {
     }
 
     return 0;
+}
+
+// NEW: Helper to remove matching leading/trailing quotes.
+static char *trim_quotes(const char *str) {
+    if (!str) return NULL;
+    // Skip any leading quotes (single or double)
+    while (*str == '"' || *str == '\'') {
+        str++;
+    }
+    size_t len = strlen(str);
+    // Remove trailing quotes (single or double)
+    while (len > 0 && (str[len - 1] == '"' || str[len - 1] == '\'')) {
+        len--;
+    }
+    return strndup(str, len);
 }
 
 // Move helper function definition before it's used
@@ -287,24 +313,189 @@ int execute_script(const char *filename) {
     return 0;
 }
 
+// NEW: Minimal implementation for evaluate_condition (uses system())
+static int evaluate_condition(const char *cond) {
+    if (!cond || strlen(cond) == 0) return 0;
+    char *trimmed = strdup(cond); // In practice, trim whitespace as needed
+    int ret = system(trimmed);
+    free(trimmed);
+    // system() returns 0 if command succeeded
+    return (ret == 0);
+}
+
+// NEW: Helper function to execute if-block commands.
+static void execute_if_block(command_t *cmd) {
+    if (evaluate_condition(cmd->if_condition))
+        execute_command(cmd->then_branch);
+    else if (cmd->else_branch)
+        execute_command(cmd->else_branch);
+}
+
+static void execute_while(command_t *cmd) {
+    while (evaluate_condition(cmd->while_condition)) {
+        execute_command(cmd->while_body);
+    }
+}
+
+static void execute_for(command_t *cmd) {
+    for (int i = 0; cmd->for_list && cmd->for_list[i] != NULL; i++) {
+        setenv(cmd->for_variable, cmd->for_list[i], 1);
+        execute_command(cmd->for_body);
+    }
+}
+
+static command_t *expand_alias_for_pipeline(command_t *cmd) {
+    if (!cmd || !cmd->args[0])
+        return cmd;
+    // If already expanded, skip further work.
+    if (cmd->alias_expanded)
+        return cmd;
+    char *alias_str = alias_get(cmd->args[0]);
+    if (!alias_str || is_recursive_alias(cmd->args[0], 0))
+        return cmd;
+    char *trimmed = trim_quotes(alias_str);
+    char buffer[SHELL_MAX_INPUT] = {0};
+    snprintf(buffer, SHELL_MAX_INPUT, "%s", trimmed);
+    free(trimmed);
+    for (int i = 1; cmd->args[i]; i++) {
+        strcat(buffer, " ");
+        strcat(buffer, cmd->args[i]);
+    }
+    command_t *expanded_cmd = parse_input(buffer);
+    if (expanded_cmd) {
+        // Copy redirection and background settings from the original command.
+        if (cmd->output_file) {
+            if (expanded_cmd->output_file)
+                free(expanded_cmd->output_file);
+            expanded_cmd->output_file = strdup(cmd->output_file);
+            expanded_cmd->append_output = cmd->append_output;
+        }
+        if (cmd->input_file) {
+            if (expanded_cmd->input_file)
+                free(expanded_cmd->input_file);
+            expanded_cmd->input_file = strdup(cmd->input_file);
+        }
+        expanded_cmd->background = cmd->background;
+        // Preserve the pipeline chain
+        command_t *chain = cmd->next;  // Save remainder.
+        cmd->next = NULL;              // Detach current node.
+        cmd = merge_commands(cmd, expanded_cmd);
+        cmd->next = chain;             // Restore the pipeline chain.
+        cmd->alias_expanded = 1;
+    }
+    return cmd;
+}
+
+static void execute_pipeline(command_t *cmd) {
+    // Update all pipeline stages with alias expansion.
+    for (command_t **p = &cmd; *p != NULL; p = &((*p)->next)) {
+        *p = expand_alias_for_pipeline(*p);
+    }
+    
+    // Count commands in pipeline
+    int n = 0;
+    command_t *cur = cmd;
+    while (cur) { n++; cur = cur->next; }
+    if (n == 0) return;
+
+    int pipes[n-1][2];
+    for (int i = 0; i < n - 1; i++) {
+        if (pipe(pipes[i]) == -1) {
+            perror("pipe");
+            return;
+        }
+    }
+    
+    pid_t pids[n];
+    cur = cmd;
+    for (int i = 0; i < n; i++) {
+        pids[i] = fork();
+        if (pids[i] < 0) {
+            perror("fork");
+            return;
+        }
+        else if (pids[i] == 0) {  // Child process
+            // If not first command, redirect stdin to previous pipe's read end.
+            if (i > 0) {
+                dup2(pipes[i-1][0], STDIN_FILENO);
+            }
+            // If not last command, redirect stdout to current pipe's write end.
+            if (i < n - 1) {
+                dup2(pipes[i][1], STDOUT_FILENO);
+            }
+            // Close all pipe FDs in child.
+            for (int j = 0; j < n - 1; j++) {
+                close(pipes[j][0]);
+                close(pipes[j][1]);
+            }
+            // Handle any redirection defined on the individual command.
+            if (cur->input_file) {
+                int fd_in = open(cur->input_file, O_RDONLY);
+                if (fd_in < 0) { perror(cur->input_file); exit(EXIT_FAILURE); }
+                dup2(fd_in, STDIN_FILENO);
+                close(fd_in);
+            }
+            if (cur->output_file) {
+                int flags = O_CREAT | O_WRONLY | (cur->append_output ? O_APPEND : O_TRUNC);
+                int fd_out = open(cur->output_file, flags, 0644);
+                if (fd_out < 0) { perror(cur->output_file); exit(EXIT_FAILURE); }
+                dup2(fd_out, STDOUT_FILENO);
+                close(fd_out);
+            }
+            execvp(cur->args[0], cur->args);
+            perror("execvp pipeline");
+            exit(EXIT_FAILURE);
+        }
+        cur = cur->next;
+    }
+    // Parent: close all pipe FDs.
+    for (int i = 0; i < n - 1; i++) {
+        close(pipes[i][0]);
+        close(pipes[i][1]);
+    }
+    // Wait for all child processes.
+    for (int i = 0; i < n; i++) {
+        waitpid(pids[i], NULL, 0);
+    }
+}
+
 /**
  * Main command execution function
  * Handles built-ins, pipes, and external commands
  */
 void execute_command(command_t *cmd) {
+    // Dispatch control structures first.
+    if (cmd->type == CMD_IF) {
+        execute_if_block(cmd);
+        return;
+    } else if (cmd->type == CMD_WHILE) {
+        execute_while(cmd);
+        return;
+    } else if (cmd->type == CMD_FOR) {
+        execute_for(cmd);
+        return;
+    }
+    // NEW: For case statements.
+    else if (cmd->type == CMD_CASE) {
+        execute_case(cmd);
+        return;
+    }
+    
     if (!cmd->args[0]) return;
     
-    // Handle built-in commands and alias expansion
+    // Handle built-in commands
     const command_entry_t *entry = lookup_command(cmd->args[0]);
     if (entry) {
         entry->func(cmd);
         return;
     }
-    if (check_alias_expansion(cmd)) return;
+    // *** If there is a pipeline, bypass simple alias expansion ***
     if (cmd->next) {
-        execute_pipe(cmd, cmd->next);
+        execute_pipeline(cmd);
         return;
     }
+    // Otherwise, perform alias expansion for a simple command.
+    if (check_alias_expansion(cmd)) return;
     
     pid_t pid = fork();
     if (pid == 0) {
@@ -396,5 +587,67 @@ void sigchld_handler(int __attribute__((unused)) sig) {
                 job_manager_remove_job(pid);
             }
         }
+    }
+}
+
+static void free_command_fields(command_t *cmd) {
+    if (!cmd) return;
+    if (cmd->command) { free(cmd->command); cmd->command = NULL; }
+    if (cmd->args) {
+        for (int i = 0; i < cmd->arg_count; i++) {
+            free(cmd->args[i]);
+        }
+        free(cmd->args); cmd->args = NULL;
+    }
+    if (cmd->input_file) { free(cmd->input_file); cmd->input_file = NULL; }
+    if (cmd->output_file) { free(cmd->output_file); cmd->output_file = NULL; }
+    if (cmd->if_condition) { free(cmd->if_condition); cmd->if_condition = NULL; }
+    if (cmd->while_condition) { free(cmd->while_condition); cmd->while_condition = NULL; }
+    if (cmd->for_variable) { free(cmd->for_variable); cmd->for_variable = NULL; }
+    if (cmd->for_list) {
+        for (int i = 0; cmd->for_list[i] != NULL; i++) {
+            free(cmd->for_list[i]);
+        }
+        free(cmd->for_list); cmd->for_list = NULL;
+    }
+}
+
+// The pipeline pointer (old_cmd->next) is preserved.
+static command_t *merge_commands(command_t *old_cmd, command_t *new_cmd) {
+    // Free old fields
+    free_command_fields(old_cmd);
+    // Transfer fields from new_cmd to old_cmd
+    old_cmd->command = new_cmd->command; new_cmd->command = NULL;
+    old_cmd->args = new_cmd->args;         new_cmd->args = NULL;
+    old_cmd->arg_count = new_cmd->arg_count;
+    old_cmd->input_file = new_cmd->input_file; new_cmd->input_file = NULL;
+    old_cmd->output_file = new_cmd->output_file; new_cmd->output_file = NULL;
+    old_cmd->append_output = new_cmd->append_output;
+    old_cmd->background = new_cmd->background;
+    // For control structures, one might also copy the branches if needed.
+    // The 'next' pointer remains unchanged.
+    free(new_cmd);  // Free the container (its fields have been transferred)
+    return old_cmd;
+}
+
+// Add a new helper for executing case statements.
+static void execute_case(command_t *cmd) {
+    // Evaluate the case expression.
+    // For simplicity, compare literally to each pattern.
+    if (!cmd->case_expression || !cmd->case_entries) return;
+    command_t *default_body = NULL;
+    for (int i = 0; i < cmd->case_entry_count; i++) {
+        case_entry_t *entry = cmd->case_entries[i];
+        printf("comparing %s to %s\n", cmd->case_expression, entry->pattern);
+        if (strcmp(entry->pattern, "*") == 0) {
+            default_body = entry->body;
+        } else if (strcmp(cmd->case_expression, entry->pattern) == 0) {
+            if (entry->body)
+                execute_command(entry->body);
+            return;
+        }
+    }
+    if (default_body) {
+        execute_command(default_body);
     }
 }
