@@ -253,13 +253,46 @@ static command_t *parse_for(char **tokens, int *pos, int count) {
     return cmd;
 }
 
-// Parse a case statement.
-// Expected syntax:
-//   case word in
-//       pattern1) command1 ;; 
-//       pattern2) command2 ;; 
-//       ... 
-//   esac
+// NEW: Helper for parsing a case entry’s body without splitting on semicolons.
+static command_t *parse_case_body_simple(char **tokens, int *pos, int count) {
+    int start = *pos;
+    // Collect tokens until we find two consecutive semicolons (";;") or "esac"
+    while (*pos < count) {
+        if (strcmp(tokens[*pos], "esac") == 0) break;
+        if (strcmp(tokens[*pos], ";") == 0) {
+            if (*pos + 1 < count && strcmp(tokens[*pos + 1], ";") == 0) {
+                break;
+            }
+        }
+        (*pos)++;
+    }
+    char body_str[4096] = "";
+    for (int i = start; i < *pos; i++) {
+        strcat(body_str, tokens[i]);
+        if (i < *pos - 1) {
+            strcat(body_str, " ");
+        }
+    }
+    // Build a simple command from the joined string.
+    command_t *cmd = malloc(sizeof(command_t));
+    memset(cmd, 0, sizeof(command_t));
+    cmd->type = CMD_SIMPLE;
+    cmd->command = strdup(body_str);
+    // For simplicity, split on whitespace
+    cmd->args = malloc(sizeof(char*) * 64);
+    cmd->arg_count = 0;
+    char *temp = strdup(body_str);
+    char *tok = strtok(temp, " ");
+    while (tok) {
+        cmd->args[cmd->arg_count++] = strdup(tok);
+        tok = strtok(NULL, " ");
+    }
+    cmd->args[cmd->arg_count] = NULL;
+    free(temp);
+    return cmd;
+}
+
+// Updated parse_case: use the simple case body parser.
 static command_t *parse_case(char **tokens, int *pos, int count) {
     command_t *cmd = malloc(sizeof(command_t));
     memset(cmd, 0, sizeof(command_t));
@@ -268,60 +301,56 @@ static command_t *parse_case(char **tokens, int *pos, int count) {
     // Skip "case"
     (*pos)++;
     
-    // Next token is the expression to match.
+    // Next token: expression to match.
     if (*pos < count) {
-        cmd->case_expression = strdup(tokens[*pos]);
+        cmd->case_expression = expand_variables_in_token(tokens[*pos]);
         (*pos)++;
     }
     // Expect "in"
     if (*pos < count && strcmp(tokens[*pos], "in") == 0)
         (*pos)++;
     
-    // Initialize case_entries array (we'll realloc as needed)
+    // Initialize case_entries array.
     cmd->case_entries = NULL;
     cmd->case_entry_count = 0;
     
-    // Parse each case entry until "esac" is encountered.
+    // Process each case entry until "esac" is found.
     while (*pos < count && strcmp(tokens[*pos], "esac") != 0) {
-        // Skip over stray ";;" tokens.
-        if (strcmp(tokens[*pos], ";;") == 0) {
+        // Skip stray ";;" delimiters.
+        while (*pos < count && strcmp(tokens[*pos], ";;") == 0) {
             (*pos)++;
-            continue;
         }
+        if (*pos >= count || strcmp(tokens[*pos], "esac") == 0)
+            break;
+        
         // Read pattern token.
         char *pattern = strdup(tokens[*pos]);
-        // Remove trailing ')' if it exists in the pattern.
         size_t len = strlen(pattern);
         if (len > 0 && pattern[len-1] == ')') {
             pattern[len-1] = '\0';
         }
-        (*pos)++; // consume pattern token
-        
-        // If the next token is ")" (separating pattern and body), skip it.
+        (*pos)++; // Consume pattern token.
         if (*pos < count && strcmp(tokens[*pos], ")") == 0) {
             (*pos)++;
         }
         
-        // Parse the command body for this entry.
-        command_t *body = NULL;
-        // If the next token is ";;", the body is empty.
-        if (*pos < count && strcmp(tokens[*pos], ";;") != 0) {
-            body = parse_command(tokens, pos, count);
-        }
+        // Build the case entry body using the new helper.
+        command_t *body = parse_case_body_simple(tokens, pos, count);
         
-        // Allocate or enlarge the array and store this entry.
+        // Store the entry.
         cmd->case_entries = realloc(cmd->case_entries, sizeof(case_entry_t*) * (cmd->case_entry_count + 1));
         case_entry_t *entry = malloc(sizeof(case_entry_t));
         entry->pattern = pattern;
         entry->body = body;
         cmd->case_entries[cmd->case_entry_count++] = entry;
         
-        // Skip over any stray delimiter tokens (";" or ";;") or ")" tokens.
-        while (*pos < count && (strcmp(tokens[*pos], ";") == 0 || strcmp(tokens[*pos], ")") == 0)) {
+        // Skip stray delimiters.
+        while (*pos < count && (strcmp(tokens[*pos], ";") == 0 ||
+                                  strcmp(tokens[*pos], ";;") == 0 ||
+                                  strcmp(tokens[*pos], ")") == 0)) {
             (*pos)++;
         }
     }
-    // Skip "esac"
     if (*pos < count && strcmp(tokens[*pos], "esac") == 0)
         (*pos)++;
     return cmd;

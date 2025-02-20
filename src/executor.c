@@ -703,7 +703,6 @@ static void execute_case(command_t *cmd) {
     command_t *default_body = NULL;
     for (int i = 0; i < cmd->case_entry_count; i++) {
         case_entry_t *entry = cmd->case_entries[i];
-        printf("comparing %s to %s\n", cmd->case_expression, entry->pattern);
         if (strcmp(entry->pattern, "*") == 0) {
             default_body = entry->body;
         } else if (strcmp(cmd->case_expression, entry->pattern) == 0) {
