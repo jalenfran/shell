@@ -11,7 +11,7 @@
 
 // Array limits
 #define MAX_ARGS 256
-#define MAX_HISTORY 100
+#define MAX_HISTORY 1000
 #define MAX_BACKGROUND_PROCESSES 64
 
 // Shell prompt styling
