@@ -44,6 +44,9 @@ volatile int fg_wait = 0;
 volatile int print_prompt_pending = 0;
 volatile int fg_process_done = 0;
 
+// NEW: Global flag to indicate command mode (-c)
+int command_mode = 0;
+
 void print_prompt(void) {
     char cwd[PATH_MAX];
     char prompt_buf[MAX_PROMPT_LEN];
@@ -205,18 +208,43 @@ static void sigterm_handler(int __attribute__((unused)) sig) {
 }
 
 int main(int argc, char *argv[]) {
+
     // Set up SIGTERM handler
     signal(SIGTERM, sigterm_handler);
     
+    // NEW: If -c flag is used, mark command_mode
+    if (argc > 1 && strcmp(argv[1], "-c") == 0) {
+        command_mode = 1;
+    }
+    
     shell_init();
 
-    // Check if a script file was provided
+    // NEW: For -c mode, execute the provided command and exit.
     if (argc > 1) {
-        if (is_script_file(argv[1])) {
+        if (strcmp(argv[1], "-c") == 0) {
+            if (argc < 3) {
+                fprintf(stderr, "Error: Missing command after -c\n");
+                shell_cleanup();
+                exit(EXIT_FAILURE);
+            }
+            command_t *cmd = parse_input(argv[2]);
+            if (cmd) {
+                execute_command(cmd);
+                int exit_status = cmd->last_status;
+                command_free(cmd);
+                shell_cleanup();
+                exit(exit_status);
+            } else {
+                fprintf(stderr, "Error: Failed to parse command\n");
+                shell_cleanup();
+                exit(EXIT_FAILURE);
+            }
+        } else if (is_script_file(argv[1])) {
             return execute_script(argv[1]);
         } else {
-            fprintf(stderr, "Error: '%s' is not a .jsh script file\n", argv[1]);
-            return 1;
+            fprintf(stderr, "Error: Unrecognized option or file '%s'\n", argv[1]);
+            shell_cleanup();
+            exit(EXIT_FAILURE);
         }
     }
 
@@ -262,7 +290,10 @@ void shell_init(void) {
     if (!getenv("PATH")) {
         setenv("PATH", "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin", 1);
     }
-    printf("Welcome to JShell! Type 'help' for available commands.\n");
+    // NEW: Only print welcome if not in command mode.
+    if (!command_mode) {
+        printf("Welcome to JShell! Type 'help' for available commands.\n");
+    }
 }
 
 void shell_cleanup(void) {
@@ -276,7 +307,10 @@ void shell_cleanup(void) {
     // Reset terminal control
     tcsetpgrp(STDIN_FILENO, getpgrp());
     
-    printf("\nGoodbye!\n");
+    // NEW: Only print goodbye if not in command mode.
+    if (!command_mode) {
+        printf("\nGoodbye!\n");
+    }
 }
 
 // Update shell_loop to handle exit properly

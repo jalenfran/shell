@@ -20,7 +20,6 @@ static void execute_for(command_t *cmd);
 static char *trim_quotes(const char *str);
 static void execute_case(command_t *cmd);
 static command_t *merge_commands(command_t *old_cmd, command_t *new_cmd);
-static void execute_subshell(command_t *cmd);
 
 extern int num_background_processes;
 extern pid_t background_processes[];
@@ -519,9 +518,6 @@ void execute_command(command_t *cmd) {
         case CMD_CASE:
             execute_case(cmd);
             return;
-        case CMD_SUBSHELL:
-            execute_subshell(cmd);
-            return;
         default:
             break;
     }
@@ -718,65 +714,6 @@ static void execute_case(command_t *cmd) {
     }
     if (default_body) {
         execute_command(default_body);
-    }
-}
-
-static void execute_subshell(command_t *cmd) {
-    
-    pid_t pid = fork();
-    
-    if (pid == 0) {
-        // Child process: create new process group
-        
-        setpgid(0, 0);
-        
-        // Reset signal handlers
-        signal(SIGINT, SIG_DFL);
-        signal(SIGQUIT, SIG_DFL);
-        signal(SIGTSTP, SIG_DFL);
-        signal(SIGTTIN, SIG_DFL);
-        signal(SIGTTOU, SIG_DFL);
-        signal(SIGCHLD, SIG_DFL);
-
-        // Handle I/O redirection
-        if (cmd->input_file) {
-            int fd = open(cmd->input_file, O_RDONLY);
-            if (fd < 0) {
-                perror("subshell input");
-                exit(EXIT_FAILURE);
-            }
-            dup2(fd, STDIN_FILENO);
-            close(fd);
-        }
-        
-        if (cmd->output_file) {
-            int flags = O_WRONLY | O_CREAT;
-            flags |= cmd->append_output ? O_APPEND : O_TRUNC;
-            int fd = open(cmd->output_file, flags, 0644);
-            if (fd < 0) {
-                perror("subshell output");
-                exit(EXIT_FAILURE);
-            }
-            dup2(fd, STDOUT_FILENO);
-            close(fd);
-        }
-
-        // Execute the subshell commands
-        execute_command(cmd->subshell_cmd);
-        exit(EXIT_SUCCESS);
-    } else if (pid > 0) {
-        // Parent process
-        if (!cmd->background) {
-            // Wait for subshell to complete if not in background
-            int status;
-            waitpid(pid, &status, WUNTRACED);
-        } else {
-            // Add to background jobs
-            job_manager_add_job(pid, "subshell", 1);
-            printf("[%d] %d\n", get_job_number(pid), pid);
-        }
-    } else {
-        perror("fork");
     }
 }
 
