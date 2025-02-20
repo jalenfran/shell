@@ -15,10 +15,15 @@ static char **tokenize(const char *input, int *count) {
         if (!*p) break;
         // Check for control characters outside quotes
         if (*p == ';' || *p == '&' || *p == '|' || *p == '<' || *p == '>' || *p == '(' || *p == ')') {
+            // Special check for two consecutive semicolons (";;")
+            if (*p == ';' && *(p+1) == ';') {
+                tokens[(*count)++] = strdup(";;");
+                p += 2;
+            }
             // Check for && and ||
-            if ((*p == '&' && *(p+1) == '&') || 
-                (*p == '|' && *(p+1) == '|')) {
-                char token[3] = {*p, *p, '\0'};  // Fixed multi-char constant issue
+            else if ((*p == '&' && *(p+1) == '&') || 
+                     (*p == '|' && *(p+1) == '|')) {
+                char token[3] = {*p, *p, '\0'};
                 tokens[(*count)++] = strdup(token);
                 p += 2;
             }
@@ -42,7 +47,14 @@ static char **tokenize(const char *input, int *count) {
             }
             if (*p == quote) p++;
         } else {
-            while (*p && !isspace(*p) && *p != ';' && *p != '&' && *p != '|' && *p != '<' && *p != '>' && *p != '(' && *p != ')') {
+            while (*p && !isspace(*p) &&
+                   *p != ';' && *p != '&' && *p != '|' &&
+                   *p != '<' && *p != '>' && *p != '(' && *p != ')') {
+                if (*p == '*' && *(p+1) == ')') {
+                    token[t++] = *p++;
+                    token[t++] = *p++;
+                    break;
+                }
                 token[t++] = *p++;
             }
         }
@@ -193,21 +205,32 @@ static command_t *parse_for(char **tokens, int *pos, int count) {
 
 static command_t *parse_case_body_simple(char **tokens, int *pos, int count) {
     int start = *pos;
+    // Collect tokens until we find ";;" or "esac"
     while (*pos < count) {
-        if (strcmp(tokens[*pos], "esac") == 0) break;
-        if (strcmp(tokens[*pos], ";") == 0 && *pos + 1 < count && strcmp(tokens[*pos + 1], ";;") == 0)
+        if (strcmp(tokens[*pos], "esac") == 0)
             break;
+        if (strcmp(tokens[*pos], ";;") == 0)
+            break;
+        // Also check for ";" immediately followed by ";;" if needed.
+        if (strcmp(tokens[*pos], ";") == 0) {
+            if (*pos + 1 < count && strcmp(tokens[*pos + 1], ";;") == 0)
+                break;
+        }
         (*pos)++;
     }
     char body_str[4096] = "";
     for (int i = start; i < *pos; i++) {
         strcat(body_str, tokens[i]);
-        if (i < *pos - 1) strcat(body_str, " ");
+        if (i < *pos - 1) {
+            strcat(body_str, " ");
+        }
     }
+    // Build a simple command from the joined string.
     command_t *cmd = malloc(sizeof(command_t));
     memset(cmd, 0, sizeof(command_t));
     cmd->type = CMD_SIMPLE;
     cmd->command = strdup(body_str);
+    // For simplicity, split on whitespace
     cmd->args = malloc(sizeof(char*) * 64);
     cmd->arg_count = 0;
     char *temp = strdup(body_str);
