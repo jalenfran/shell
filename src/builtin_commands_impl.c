@@ -71,11 +71,59 @@ int cmd_help(command_t * __attribute__((unused)) cmd) {
 
 // cd command
 int cmd_cd(command_t *cmd) {
-    if (cmd->args[1])
-        if (chdir(cmd->args[1]) != 0)
+    if (cmd->args[1]) {
+        char path[PATH_MAX];
+        char oldpwd[PATH_MAX];
+
+        // Save current working directory before changing directory.
+        if (getcwd(oldpwd, sizeof(oldpwd)) == NULL) {
+            perror("getcwd");
+            return 1;
+        }
+
+        // Check for "cd -" behavior.
+        if (strcmp(cmd->args[1], "-") == 0) {
+            char *prev = getenv("OLDPWD");
+            if (!prev) {
+                fprintf(stderr, "cd: OLDPWD not set\n");
+                return 1;
+            }
+            // Set the path to the previous directory.
+            strncpy(path, prev, PATH_MAX);
+            path[PATH_MAX - 1] = '\0';
+            // Print the directory as per shell convention.
+            printf("%s\n", path);
+        }
+        // Handle '~' expansion.
+        else if (cmd->args[1][0] == '~') {
+            char *home = getenv("HOME");
+            if (!home) {
+                fprintf(stderr, "cd: HOME environment variable not set\n");
+                return 1;
+            }
+            if (strcmp(cmd->args[1], "~") == 0) {
+                strncpy(path, home, PATH_MAX);
+                path[PATH_MAX - 1] = '\0';
+            } else {
+                snprintf(path, PATH_MAX, "%s%s", home, cmd->args[1] + 1);
+            }
+        }
+        // Otherwise, use the provided path.
+        else {
+            strncpy(path, cmd->args[1], PATH_MAX);
+            path[PATH_MAX - 1] = '\0';
+        }
+
+        // Attempt to change directory.
+        if (chdir(path) != 0)
             perror("cd");
-        else { /* success */ }
-    else {
+        else {
+            // On success, update OLDPWD to point to the previous directory.
+            if (setenv("OLDPWD", oldpwd, 1) != 0) {
+                perror("setenv");
+            }
+        }
+    } else {
         fprintf(stderr, "cd: expected argument\n");
     }
     return 0;
