@@ -22,8 +22,7 @@ extern void continue_job(pid_t pid, int foreground);
 extern void kill_job(int job_id);
 extern char *get_process_command(pid_t pid);
 
-// Minimal help text as in executor.c
-// Help text for the shell
+// Minimal help text.
 static const char *HELP_TEXT = 
     "\n\033[1;36m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\033[0m\n"
     "\033[1;32mJShell v1.0\033[0m - A Modern Unix Shell Implementation\n"
@@ -66,7 +65,6 @@ static const char *HELP_TEXT =
 
 // help command
 int cmd_help(command_t * __attribute__((unused)) cmd) {
-    // Mimic executor.c's logic: print help text (or list registry commands)
     printf("%s", HELP_TEXT);
     return 0;
 }
@@ -113,18 +111,14 @@ int cmd_alias(command_t *cmd) {
         if (equals) {
             *equals = '\0';
             char *name = cmd->args[1];
-            // Duplicate the alias value so it is malloc()'d.
             char *value = strdup(equals + 1);
-            // Handle optional surrounding quotes
             if (value[0] == '\'' || value[0] == '"') {
                 char quote = value[0];
-                // Remove the leading quote
                 memmove(value, value + 1, strlen(value));
                 size_t len = strlen(value);
                 if (len > 0 && value[len - 1] == quote)
                     value[len - 1] = '\0';
             }
-            // If there are additional tokens, join them with a space
             for (int i = 2; i < cmd->arg_count; i++) {
                 size_t new_len = strlen(value) + 1 + strlen(cmd->args[i]) + 1;
                 char *new_value = malloc(new_len);
@@ -132,11 +126,10 @@ int cmd_alias(command_t *cmd) {
                 free(value);
                 value = new_value;
             }
-            // Trim leading whitespace without modifying the malloced pointer:
             char *temp = value;
             while (*temp && isspace(*temp)) temp++;
             char *final_value = strdup(temp);
-            free(value); // Free the original duplicated string.
+            free(value);
             if (!*final_value) {
                 fprintf(stderr, "alias: empty alias value not allowed\n");
                 free(final_value);
@@ -196,8 +189,8 @@ int cmd_bg(command_t *cmd) {
         int job_id = atoi(cmd->args[1] + 1);
         pid_t pid = get_pid_by_job_id(job_id);
         if (pid > 0) {
-            continue_job(pid, 0);          // Send SIGCONT in background
-            job_manager_update_state(pid, JOB_RUNNING);  // Update state to running
+            continue_job(pid, 0);
+            job_manager_update_state(pid, JOB_RUNNING);
             printf("[%d] %s &\n", job_id, get_process_command(pid));
         } else {
             fprintf(stderr, "bg: no such job\n");

@@ -55,4 +55,4 @@ void list_commands(void);
  */
 void cleanup_command_registry(void);
 
-#endif // COMMAND_REGISTRY_H
+#endif

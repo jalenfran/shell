@@ -14,54 +14,37 @@
 #include "command_registry.h"
 #include "job_manager.h"
 
-// Add signal handler declarations at the top before any functions
+// Signal handlers
 static void sigchld_handler(int);
 static void sigint_handler(int);
 static void sigterm_handler(int);
 static void sigtstp_handler(int);
 
-// Change these from static to global
 int current_cursor_pos = 0;
 char current_prompt[SHELL_MAX_INPUT];
-
-// Remove legacy declarations:
-
-// Define the global current_command variable (matches the extern declaration)
 char current_command[MAX_CMD_LEN];
-
-// Define these as global variables for input.c to use
 char current_input_buffer[SHELL_MAX_INPUT];
 int current_input_length = 0;
-
-// Add a global flag for exit state
 static volatile int exiting = 0;
-
 volatile int in_input = 0;  
-pid_t foreground_pid = 0; 
-
-// Add global foreground wait flag:
-volatile int fg_wait = 0;
-volatile int print_prompt_pending = 0;
-volatile int fg_process_done = 0;
-
-// NEW: Global flag to indicate command mode (-c)
+pid_t foreground_pid = 0;
+volatile int fg_wait = 0, print_prompt_pending = 0, fg_process_done = 0;
 int command_mode = 0;
 
 void print_prompt(void) {
     char cwd[PATH_MAX];
     char prompt_buf[MAX_PROMPT_LEN];
-    
+    // Check if getcwd fails and report the error.
     if (getcwd(cwd, sizeof(cwd)) == NULL) {
-        strcpy(cwd, "???");
+        perror("getcwd failed");
+        // Fallback: use HOME or a known directory.
+        char *home = getenv("HOME");
+        if (home)
+            strncpy(cwd, home, sizeof(cwd));
+        else
+            strcpy(cwd, "~");
     }
-    
-    size_t prompt_result = snprintf(prompt_buf, sizeof(prompt_buf), "%s %s", cwd, SHELL_PROMPT);
-    if (prompt_result >= sizeof(prompt_buf)) {
-        strcpy(current_prompt, SHELL_PROMPT);
-        printf("%s ", SHELL_PROMPT);
-        return;
-    }
-    
+    snprintf(prompt_buf, sizeof(prompt_buf), "%s %s", cwd, SHELL_PROMPT);
     strcpy(current_prompt, prompt_buf);
     printf("%s", prompt_buf);
 }
@@ -69,21 +52,19 @@ void print_prompt(void) {
 static void set_signal_handlers() {
     struct sigaction sa;
     sigemptyset(&sa.sa_mask);
-    
-    // Disable SA_RESTART for SIGCHLD so that blocking input is interrupted
-    sa.sa_flags = SA_RESTART | SA_NOCLDSTOP;  // Don't create zombies for stopped children
+    sa.sa_flags = SA_RESTART | SA_NOCLDSTOP;
     sa.sa_handler = sigchld_handler;
     sigaction(SIGCHLD, &sa, NULL);
     
     sa.sa_handler = sigint_handler;
     sigaction(SIGINT, &sa, NULL);
-
+    
     sa.sa_handler = sigtstp_handler;
     sigaction(SIGTSTP, &sa, NULL);
-
-    signal(SIGQUIT, SIG_IGN);  // Ignore quit signal
-    signal(SIGTTIN, SIG_IGN);  // Ignore background read
-    signal(SIGTTOU, SIG_IGN);  // Ignore background write
+    
+    signal(SIGQUIT, SIG_IGN);
+    signal(SIGTTIN, SIG_IGN);
+    signal(SIGTTOU, SIG_IGN);
 }
 
 void cleanup_background_processes(void) {
@@ -122,10 +103,7 @@ static void sigchld_handler(int __attribute__((unused)) sig) {
     int status;
     char saved_input[SHELL_MAX_INPUT];
     size_t saved_cursor = (size_t)current_cursor_pos;
-
-    // Save current input state
     strncpy(saved_input, current_input_buffer, SHELL_MAX_INPUT);
-
     while ((pid = waitpid(-1, &status, WNOHANG | WUNTRACED | WCONTINUED)) > 0) {
         job_t *job = job_manager_get_job_by_pid(pid);
         if (job) {
@@ -134,9 +112,8 @@ static void sigchld_handler(int __attribute__((unused)) sig) {
                 printf("\r\033[K[%d] Suspended %s\n", job->job_id, job->command);
                 print_prompt_pending = 1;
             } else if (WIFSIGNALED(status) || WIFEXITED(status)) {
-                if (pid == foreground_pid) {
-                    fg_process_done = 1;
-                } else {
+                if (pid == foreground_pid) fg_process_done = 1;
+                else {
                     printf("\r\033[K[%d] Done %s\n", job->job_id, job->command);
                     print_prompt_pending = 1;
                 }
@@ -144,15 +121,12 @@ static void sigchld_handler(int __attribute__((unused)) sig) {
             }
         }
     }
-    
-    // Only print prompt if not in foreground process and we have a pending prompt
     if (print_prompt_pending && !fg_wait) {
         if (in_input) {
             print_prompt();
             printf("%s", saved_input);
-            if (saved_cursor < strlen(saved_input)) {
+            if (saved_cursor < strlen(saved_input))
                 printf("\033[%luD", strlen(saved_input) - saved_cursor);
-            }
         } else {
             print_prompt();
         }
@@ -172,9 +146,7 @@ static void sigint_handler(int __attribute__((unused)) sig) {
     current_input_length = 0;
     current_cursor_pos = 0;
     current_input_buffer[0] = '\0';
-    if (!foreground_pid) {
-        print_prompt();
-    }
+    if (!foreground_pid) print_prompt();
     fflush(stdout);
 }
 
@@ -186,40 +158,24 @@ static void sigtstp_handler(int __attribute__((unused)) sig) {
     } else {
         printf("\r\033[K^Z\n");
     }
-
-    // Clear input state
     current_input_length = 0;
     current_cursor_pos = 0;
     current_input_buffer[0] = '\0';
-
     print_prompt();
     fflush(stdout);
 }
 
-// Add this function to set foreground pid
-void set_foreground_pid(pid_t pid) {
-    foreground_pid = pid;
-}
+void set_foreground_pid(pid_t pid) { foreground_pid = pid; }
 
-// Add signal handler for SIGTERM
 static void sigterm_handler(int __attribute__((unused)) sig) {
     cleanup_background_processes();
     exit(EXIT_SUCCESS);
 }
 
 int main(int argc, char *argv[]) {
-
-    // Set up SIGTERM handler
     signal(SIGTERM, sigterm_handler);
-    
-    // NEW: If -c flag is used, mark command_mode
-    if (argc > 1 && strcmp(argv[1], "-c") == 0) {
-        command_mode = 1;
-    }
-    
+    if (argc > 1 && strcmp(argv[1], "-c") == 0) command_mode = 1;
     shell_init();
-
-    // NEW: For -c mode, execute the provided command and exit.
     if (argc > 1) {
         if (strcmp(argv[1], "-c") == 0) {
             if (argc < 3) {
@@ -247,17 +203,15 @@ int main(int argc, char *argv[]) {
             exit(EXIT_FAILURE);
         }
     }
-
     shell_loop();
     shell_cleanup();
     return 0;
 }
 
-// Update shell initialization to properly handle terminal control
 void shell_init(void) {
-    // Put shell in its own process group and grab terminal control
-    pid_t shell_pgid = getpid();
+    // ...existing code...
     if (isatty(STDIN_FILENO)) {
+        pid_t shell_pgid = getpid();
         while (tcgetpgrp(STDIN_FILENO) != (shell_pgid = getpgrp()))
             kill(-shell_pgid, SIGTTIN);
         signal(SIGINT, SIG_IGN);
@@ -273,13 +227,7 @@ void shell_init(void) {
         tcsetpgrp(STDIN_FILENO, shell_pgid);
         set_signal_handlers();
     }
-    {
-        struct sigaction sa;
-        sigemptyset(&sa.sa_mask);
-        sa.sa_flags = SA_RESTART | SA_NOCLDSTOP;
-        sa.sa_handler = sigchld_handler;
-        sigaction(SIGCHLD, &sa, NULL);
-    }
+    // ...existing code...
     setenv("SHELL_NAME", "jshell", 1);
     history_init();
     history_load();
@@ -290,67 +238,41 @@ void shell_init(void) {
     if (!getenv("PATH")) {
         setenv("PATH", "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin", 1);
     }
-    // NEW: Only print welcome if not in command mode.
-    if (!command_mode) {
-        printf("Welcome to JShell! Type 'help' for available commands.\n");
-    }
+    if (!command_mode) printf("Welcome to JShell! Type 'help' for available commands.\n");
 }
 
 void shell_cleanup(void) {
-    // Clean up all subsystems
     history_save();
     history_cleanup();
     alias_cleanup();
     cleanup_command_registry();
     cleanup_background_processes();
-    
-    // Reset terminal control
     tcsetpgrp(STDIN_FILENO, getpgrp());
-    
-    // NEW: Only print goodbye if not in command mode.
-    if (!command_mode) {
-        printf("\nGoodbye!\n");
-    }
+    if (!command_mode) printf("\nGoodbye!\n");
 }
 
-// Update shell_loop to handle exit properly
 void shell_loop(void) {
     char *input;
     command_t *cmd;
     int status = 1;
-
     while (status && !exiting) {
         print_prompt();
         current_input_length = 0;
         current_input_buffer[0] = '\0';
-
-        in_input = 1;  // Mark we're waiting for input.
+        in_input = 1;
         input = read_input();
-        in_input = 0;  // Clear flag after input is received.
-
-        if (!input) {
-            printf("\n");
-            break;
-        }
-        if (strlen(input) == 0) {
-            free(input);
-            continue;
-        }
+        in_input = 0;
+        if (!input) { printf("\n"); break; }
+        if (strlen(input) == 0) { free(input); continue; }
         cmd = parse_input(input);
         if (cmd) {
-            // Now, if the command is an if block, execute it regardless of cmd->command.
-            if (cmd->type == CMD_IF || cmd->type == CMD_WHILE || cmd->type == CMD_FOR || cmd->type == CMD_CASE || cmd->type == CMD_SUBSHELL
-            || cmd->type == CMD_AND || cmd->type == CMD_OR || cmd->type == CMD_SEQUENCE) {
+            if (cmd->type == CMD_IF || cmd->type == CMD_WHILE || cmd->type == CMD_FOR ||
+                cmd->type == CMD_CASE || cmd->type == CMD_SUBSHELL ||
+                cmd->type == CMD_AND || cmd->type == CMD_OR || cmd->type == CMD_SEQUENCE) {
                 execute_command(cmd);
-            }
-            else if (cmd->command) {
-                if (strcmp(cmd->command, "exit") == 0) {
-                    cleanup_background_processes();
-                    status = 0;
-                } else {
-                    strncpy(current_command, cmd->args[0], MAX_CMD_LEN - 1);
-                    execute_command(cmd);
-                }
+            } else if (cmd->command) {
+                if (strcmp(cmd->command, "exit") == 0) { cleanup_background_processes(); status = 0; }
+                else { strncpy(current_command, cmd->args[0], MAX_CMD_LEN - 1); execute_command(cmd); }
             }
         }
         free(input);

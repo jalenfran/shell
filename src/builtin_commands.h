@@ -3,4 +3,4 @@
 
 void register_builtin_commands(void);
 
-#endif // BUILTIN_COMMANDS_H
+#endif

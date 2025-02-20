@@ -16,7 +16,7 @@ static struct sigaction old_sigint;
 static struct sigaction old_sigtstp;
 static struct sigaction old_sigchld;
 
-/* Helper to safely print messages without disrupting input */
+// Simple safe print function.
 static void safe_print(const char *msg) {
     if (in_input) {
         // Move cursor to new line, clear, print msg then reprint prompt and input

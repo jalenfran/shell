@@ -6,18 +6,16 @@
 
 static alias_t *alias_list_head = NULL;
 
+// Check alias name validity.
 int is_valid_alias_name(const char *name) {
-    // Check for empty name
     if (!name || !*name) {
         return 0;
     }
     
-    // First character must be a letter
     if (!isalpha(*name)) {
         return 0;
     }
     
-    // Rest of the characters must be alphanumeric or underscore
     for (const char *p = name + 1; *p; p++) {
         if (!isalnum(*p) && *p != '_') {
             return 0;
@@ -34,10 +32,8 @@ void alias_init(void) {
 void alias_add(const char *name, const char *command) {
     alias_t *current = alias_list_head;
     
-    // Check if alias already exists
     while (current) {
         if (strcmp(current->name, name) == 0) {
-            // Update existing alias
             free(current->command);
             current->command = strdup(command);
             return;
@@ -45,7 +41,6 @@ void alias_add(const char *name, const char *command) {
         current = current->next;
     }
     
-    // Create new alias
     alias_t *new_alias = malloc(sizeof(alias_t));
     new_alias->name = strdup(name);
     new_alias->command = strdup(command);

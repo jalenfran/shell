@@ -58,7 +58,6 @@ void history_load(void) {
 
     char line[SHELL_MAX_INPUT];
     while (fgets(line, sizeof(line), fp)) {
-        // Remove trailing newline
         size_t len = strlen(line);
         if (len > 0 && line[len-1] == '\n') {
             line[len-1] = '\0';

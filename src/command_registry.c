@@ -22,23 +22,19 @@ void cleanup_command_registry(void) {
 }
 
 int register_command(const char *name, command_func_t func, const char *help) {
-    if (!commands || command_count >= MAX_COMMANDS) {
+    if (!commands || command_count >= MAX_COMMANDS)
         return -1;
-    }
-
     commands[command_count].name = name;
     commands[command_count].func = func;
     commands[command_count].help_text = help;
     command_count++;
-
     return 0;
 }
 
 const command_entry_t *lookup_command(const char *name) {
     for (int i = 0; i < command_count; i++) {
-        if (strcmp(commands[i].name, name) == 0) {
+        if (strcmp(commands[i].name, name) == 0)
             return &commands[i];
-        }
     }
     return NULL;
 }

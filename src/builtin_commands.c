@@ -2,7 +2,6 @@
 #include "command_registry.h"
 #include "shell.h"
 
-// Forward declarations – ensure these functions are declared in a header or remove 'static'
 extern int cmd_help(command_t *cmd);
 extern int cmd_cd(command_t *cmd);
 extern int cmd_exit(command_t *cmd);
