@@ -212,17 +212,45 @@ int cmd_kill(command_t *cmd) {
     return 0;
 }
 
-// export command
+// Updated export command
 int cmd_export(command_t *cmd) {
     if (cmd->args[1]) {
-        char *equals = strchr(cmd->args[1], '=');
-        if (equals) {
-            *equals = '\0';
-            if (setenv(cmd->args[1], equals + 1, 1) != 0)
-                perror("export");
-        } else {
-            fprintf(stderr, "export: invalid format (use VAR=value)\n");
+        // Reconstruct the full assignment from tokens 1..(arg_count-1)
+        int total_len = 0;
+        for (int i = 1; i < cmd->arg_count; i++) {
+            total_len += strlen(cmd->args[i]) + 1;  // plus space separator
         }
+        char *assignment = malloc(total_len);
+        assignment[0] = '\0';
+        for (int i = 1; i < cmd->arg_count; i++) {
+            strcat(assignment, cmd->args[i]);
+            if (i < cmd->arg_count - 1)
+                strcat(assignment, " ");
+        }
+        
+        char *equals = strchr(assignment, '=');
+        if (!equals) {
+            fprintf(stderr, "export: invalid format (use VAR=value)\n");
+            free(assignment);
+            return 0;
+        }
+        
+        *equals = '\0';
+        char *var = assignment;
+        char *value = equals + 1;
+        
+        // Remove surrounding quotes if present.
+        size_t len = strlen(value);
+        if (len >= 2 && ((value[0] == '\"' && value[len - 1] == '\"') ||
+                         (value[0] == '\'' && value[len - 1] == '\''))) {
+            value[len - 1] = '\0';  // remove closing quote
+            value++;                // skip opening quote
+        }
+        
+        if (setenv(var, value, 1) != 0)
+            perror("export");
+        
+        free(assignment);
     } else {
         fprintf(stderr, "export: missing variable assignment\n");
     }
