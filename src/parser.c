@@ -5,7 +5,7 @@
 #include "shell.h"
 #include "command.h"
 
-// Updated tokenize: split on various control characters.
+// Tokenizes the input into an array of tokens.
 static char **tokenize(const char *input, int *count) {
     char **tokens = malloc(sizeof(char*) * 256);
     *count = 0;
@@ -13,21 +13,16 @@ static char **tokenize(const char *input, int *count) {
     while (*p) {
         while (isspace(*p)) p++;
         if (!*p) break;
-        // Check for control characters outside quotes
         if (*p == ';' || *p == '&' || *p == '|' || *p == '<' || *p == '>' || *p == '(' || *p == ')') {
-            // Special check for two consecutive semicolons (";;")
             if (*p == ';' && *(p+1) == ';') {
                 tokens[(*count)++] = strdup(";;");
                 p += 2;
             }
-            // Check for && and ||
-            else if ((*p == '&' && *(p+1) == '&') || 
-                     (*p == '|' && *(p+1) == '|')) {
+            else if ((*p == '&' && *(p+1) == '&') || (*p == '|' && *(p+1) == '|')) {
                 char token[3] = {*p, *p, '\0'};
                 tokens[(*count)++] = strdup(token);
                 p += 2;
             }
-            // For ">>", check next character
             else if (*p == '>' && *(p+1) == '>') {
                 tokens[(*count)++] = strdup(">>");
                 p += 2;
@@ -42,9 +37,8 @@ static char **tokenize(const char *input, int *count) {
         int t = 0;
         if (*p == '"' || *p == '\'') {
             char quote = *p++;
-            while (*p && *p != quote) {
+            while (*p && *p != quote)
                 token[t++] = *p++;
-            }
             if (*p == quote) p++;
         } else {
             while (*p && !isspace(*p) &&
@@ -65,16 +59,7 @@ static char **tokenize(const char *input, int *count) {
     return tokens;
 }
 
-// Expands an environment variable if the token begins with '$'
-static char *expand_variables_in_token(const char *token) {
-    if (token && token[0] == '$') {
-        char *env_val = getenv(token + 1);
-        return env_val ? strdup(env_val) : strdup("");
-    }
-    return strdup(token);
-}
-
-// Forward declarations for recursive descent parsing.
+// Forward declarations
 static command_t *parse_command(char **tokens, int *pos, int count);
 static command_t *parse_if(char **tokens, int *pos, int count);
 static command_t *parse_while(char **tokens, int *pos, int count);
@@ -82,18 +67,7 @@ static command_t *parse_for(char **tokens, int *pos, int count);
 static command_t *parse_case(char **tokens, int *pos, int count);
 static command_t *parse_simple(char **tokens, int *pos, int count);
 static command_t *parse_subshell(char **tokens, int *pos, int count);
-
-// Parses pipelines of commands separated by '|'.
-static command_t *parse_pipeline(char **tokens, int *pos, int count) {
-    command_t *head = parse_simple(tokens, pos, count);
-    command_t *current = head;
-    while (*pos < count && strcmp(tokens[*pos], "|") == 0) {
-        (*pos)++;  // Skip '|'
-        current->next = parse_simple(tokens, pos, count);
-        current = current->next;
-    }
-    return head;
-}
+static command_t *parse_pipeline(char **tokens, int *pos, int count);
 
 command_t *parse_input(char *input) {
     int count = 0;
@@ -205,13 +179,11 @@ static command_t *parse_for(char **tokens, int *pos, int count) {
 
 static command_t *parse_case_body_simple(char **tokens, int *pos, int count) {
     int start = *pos;
-    // Collect tokens until we find ";;" or "esac"
     while (*pos < count) {
         if (strcmp(tokens[*pos], "esac") == 0)
             break;
         if (strcmp(tokens[*pos], ";;") == 0)
             break;
-        // Also check for ";" immediately followed by ";;" if needed.
         if (strcmp(tokens[*pos], ";") == 0) {
             if (*pos + 1 < count && strcmp(tokens[*pos + 1], ";;") == 0)
                 break;
@@ -225,12 +197,10 @@ static command_t *parse_case_body_simple(char **tokens, int *pos, int count) {
             strcat(body_str, " ");
         }
     }
-    // Build a simple command from the joined string.
     command_t *cmd = malloc(sizeof(command_t));
     memset(cmd, 0, sizeof(command_t));
     cmd->type = CMD_SIMPLE;
     cmd->command = strdup(body_str);
-    // For simplicity, split on whitespace
     cmd->args = malloc(sizeof(char*) * 64);
     cmd->arg_count = 0;
     char *temp = strdup(body_str);
@@ -250,7 +220,7 @@ static command_t *parse_case(char **tokens, int *pos, int count) {
     cmd->type = CMD_CASE;
     (*pos)++;
     if (*pos < count) {
-        cmd->case_expression = expand_variables_in_token(tokens[*pos]);
+        cmd->case_expression = strdup(tokens[*pos]);
         (*pos)++;
     }
     if (*pos < count && strcmp(tokens[*pos], "in") == 0) (*pos)++;
@@ -318,8 +288,7 @@ static command_t *parse_simple(char **tokens, int *pos, int count) {
             if (*pos < count) { cmd->output_file = strdup(tokens[*pos]); cmd->append_output = is_append; (*pos)++; }
             continue;
         }
-        char *expanded = expand_variables_in_token(tokens[*pos]);
-        cmd->args[cmd->arg_count++] = expanded;
+        cmd->args[cmd->arg_count++] = strdup(tokens[*pos]);
         (*pos)++;
     }
     cmd->args[cmd->arg_count] = NULL;
@@ -365,4 +334,16 @@ static command_t *parse_subshell(char **tokens, int *pos, int count) {
         }
     }
     return cmd;
+}
+
+// [Restored] Function: parse_pipeline
+static command_t *parse_pipeline(char **tokens, int *pos, int count) {
+    command_t *head = parse_simple(tokens, pos, count);
+    command_t *current = head;
+    while (*pos < count && strcmp(tokens[*pos], "|") == 0) {
+        (*pos)++;  // Skip the pipe token
+        current->next = parse_simple(tokens, pos, count);
+        current = current->next;
+    }
+    return head;
 }

@@ -209,7 +209,6 @@ int main(int argc, char *argv[]) {
 }
 
 void shell_init(void) {
-    // ...existing code...
     if (isatty(STDIN_FILENO)) {
         pid_t shell_pgid = getpid();
         while (tcgetpgrp(STDIN_FILENO) != (shell_pgid = getpgrp()))
@@ -227,7 +226,6 @@ void shell_init(void) {
         tcsetpgrp(STDIN_FILENO, shell_pgid);
         set_signal_handlers();
     }
-    // ...existing code...
     setenv("SHELL_NAME", "jshell", 1);
     history_init();
     history_load();

@@ -406,7 +406,7 @@ void execute_command(command_t *cmd) {
     }
     if (check_alias_expansion(cmd)) return;
     pid_t pid = fork();
-    if (pid == 0) {
+    if (pid == 0) {  // Child process
         setpgid(0, 0);
         signal(SIGINT, SIG_DFL);
         signal(SIGQUIT, SIG_DFL);
@@ -414,6 +414,16 @@ void execute_command(command_t *cmd) {
         signal(SIGTTIN, SIG_DFL);
         signal(SIGTTOU, SIG_DFL);
         signal(SIGCHLD, SIG_DFL);
+        
+        // NEW: Expand arguments at runtime.
+        for (int i = 0; i < cmd->arg_count; i++) {
+            if (cmd->args[i][0] == '$') {
+                char *val = getenv(cmd->args[i] + 1);
+                free(cmd->args[i]);
+                cmd->args[i] = val ? strdup(val) : strdup("");
+            }
+        }
+        
         if (cmd->output_file != NULL) {
             int flags = O_CREAT | O_WRONLY | (cmd->append_output ? O_APPEND : O_TRUNC);
             int fd_out = open(cmd->output_file, flags, 0644);
@@ -523,19 +533,32 @@ static command_t *merge_commands(command_t *old_cmd, command_t *new_cmd) {
     return old_cmd;
 }
 
+// Updated execute_case to perform runtime expansion of the case expression.
 static void execute_case(command_t *cmd) {
     if (!cmd->case_expression || !cmd->case_entries) return;
+    
+    // Expand environment variable if the expression starts with '$'
+    char *expanded_expr;
+    if (cmd->case_expression[0] == '$') {
+        char *val = getenv(cmd->case_expression + 1);
+        expanded_expr = val ? strdup(val) : strdup("");
+    } else {
+        expanded_expr = strdup(cmd->case_expression);
+    }
+    
     command_t *default_body = NULL;
     for (int i = 0; i < cmd->case_entry_count; i++) {
         case_entry_t *entry = cmd->case_entries[i];
         if (strcmp(entry->pattern, "*") == 0)
             default_body = entry->body;
-        else if (strcmp(cmd->case_expression, entry->pattern) == 0) {
+        else if (strcmp(expanded_expr, entry->pattern) == 0) {
             if (entry->body)
                 execute_command(entry->body);
+            free(expanded_expr);
             return;
         }
     }
+    free(expanded_expr);
     if (default_body) execute_command(default_body);
 }
 

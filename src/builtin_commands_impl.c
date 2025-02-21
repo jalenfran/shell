@@ -160,17 +160,27 @@ int cmd_alias(command_t *cmd) {
             *equals = '\0';
             char *name = cmd->args[1];
             char *value = strdup(equals + 1);
-            if (value[0] == '\'' || value[0] == '"') {
+            // Trim surrounding quotes if present.
+            size_t vlen = strlen(value);
+            if (vlen > 0 && (value[0] == '\'' || value[0] == '"')) {
                 char quote = value[0];
-                memmove(value, value + 1, strlen(value));
-                size_t len = strlen(value);
-                if (len > 0 && value[len - 1] == quote)
-                    value[len - 1] = '\0';
+                // Copy the null terminator as well.
+                memmove(value, value + 1, strlen(value) + 1);
+                vlen = strlen(value);
+                if (vlen > 0 && value[vlen - 1] == quote)
+                    value[vlen - 1] = '\0';
             }
             for (int i = 2; i < cmd->arg_count; i++) {
                 size_t new_len = strlen(value) + 1 + strlen(cmd->args[i]) + 1;
                 char *new_value = malloc(new_len);
                 snprintf(new_value, new_len, "%s %s", value, cmd->args[i]);
+            
+                // Trim trailing quotes if any
+                size_t vlen = strlen(new_value);
+                if (vlen > 0 && (new_value[vlen - 1] == '\'' || new_value[vlen - 1] == '"')) {
+                    new_value[vlen - 1] = '\0';
+                }
+            
                 free(value);
                 value = new_value;
             }
